@@ -265,7 +265,21 @@ def town_data(sc):
         w, h, depth, _ = props.PROPS[name]
         stand(x, y, w, h, depth)
     return dict(w=W * TS, h=H * TS, cell=cell, spawn=[FX, H * TS - 150],
-                solid=[''.join('1' if v else '0' for v in row) for row in solid], things=things)
+                solid=[''.join('1' if v else '0' for v in row) for row in solid], things=things, fx=effects(sc))
+
+
+def effects(sc):
+    """Where the page draws its moving effects, in map pixels."""
+    def spots(table):
+        return [[ox + x, oy + y, *rest] for i, (ox, oy) in enumerate(sc['homes']) for x, y, *rest in
+                (table.get(i, []) if isinstance(table.get(i, []), list) else [table[i]])]
+    fx, fy = sc['hall'][0] + buildings.HALL_FLAG[0], sc['hall'][1] + buildings.HALL_FLAG[1]
+    lamps = list(sc['lamps']) + [(x, y) for name, x, y in sc['props'] if name == 'lamp']
+    return dict(
+        smoke=spots(buildings.CHIMNEYS), bulbs=spots(buildings.BULBS), lights=spots(buildings.LIGHTS),
+        blink=spots(buildings.BLINK), lamps=[[x, y - 100] for x, y in lamps],
+        flag=[fx + buildings.FLAG[0], fy + buildings.FLAG[1], buildings.FLAG[2], buildings.FLAG[3]],
+        fountain=[FX, FY])
 
 
 # ---------- the visitor (cell 48 x 64, feet at the bottom centre) ----------

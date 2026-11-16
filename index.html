@@ -15,7 +15,7 @@
 </head>
 <body>
 <canvas id="view"></canvas>
-<div id="hint">Walk with the arrow keys or WASD. Zoom with the mouse wheel or + and &minus;. Press 0 to see the whole town.</div>
+<div id="hint">Walk with the arrow keys or WASD. Zoom with the mouse wheel or + and &minus;. Press 0 to see the whole town, M to turn the sound off.</div>
 <script src="maps/town-1950s.js"></script>
 <script>
 'use strict';
@@ -127,6 +127,172 @@ function draw() {
     const x1 = Math.min(x + w, left + FRAME_W), y1 = Math.min(y + h, top + FRAME_H);
     if (x1 > x0 && y1 > y0) ctx.drawImage(art.objects, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
   }
+  drawEffects(performance.now() / 1000, camX, camY, canvas.width / scale, canvas.height / scale);
+}
+
+// ---------- moving effects ----------
+// All drawn as shapes, not pictures, so they stay smooth at any zoom. TOWN.fx (written by
+// tools/make_town_hd.py) says where each one belongs in the art.
+const FX = TOWN.fx;
+const INK = '#3a241c';
+
+function hash(a, b) {                                      // steady 0..1 number for a pair of whole numbers
+  const v = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+function smoke(t, x, y, k) {                               // soft puffs that rise, drift right, grow and fade
+  for (let i = 0; i < 7; i++) {
+    const p = (t * 0.11 + i / 7 + k * 0.13) % 1;
+    const px = x + p * 26 + Math.sin(p * 7 + i * 2 + k) * 9 * p, py = y - p * 150, r = 6 + p * 20;
+    ctx.globalAlpha = Math.min(1, p * 16) * (1 - p) * 0.7;
+    ctx.fillStyle = '#f6f0e4';
+    ctx.beginPath(); ctx.arc(px, py, r, 0, 7); ctx.fill();
+    ctx.fillStyle = '#d8cfc6';
+    ctx.beginPath(); ctx.arc(px + r * 0.2, py + r * 0.25, r * 0.7, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function water(t, x, y) {                                  // rings spreading in the basin, falling streams, glints
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(x, y - 3, 80, 58, 0, 0, 7); ctx.clip();
+  ctx.strokeStyle = '#f2fbf8'; ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    const p = (t * 0.22 + i / 3) % 1;
+    ctx.globalAlpha = (1 - p) * 0.55;
+    ctx.beginPath(); ctx.ellipse(x, y + 2, 26 + p * 58, 12 + p * 46, 0, 0, 7); ctx.stroke();
+  }
+  for (let i = 0; i < 16; i++) {
+    const a = hash(i, 3) * 6.283, d = 0.45 + hash(i, 5) * 0.5;
+    ctx.globalAlpha = Math.max(0, Math.sin(t * (1.5 + hash(i, 7) * 2) + i * 2.4)) * 0.8;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(x + Math.cos(a) * 78 * d - 2, y - 3 + Math.sin(a) * 56 * d - 1, 5, 2);
+  }
+  ctx.restore();
+  ctx.fillStyle = '#f6fcf8';
+  [-36, -22, -8, 8, 22, 36].forEach((sx, i) => {             // drops running down each stream
+    const top = y - 58 + Math.abs(sx) / 6, len = 52 + 12 - Math.abs(sx) / 4 - Math.abs(sx) / 6;
+    for (let j = 0; j < 3; j++) {
+      const p = (t * 1.3 + j / 3 + i * 0.17) % 1;
+      ctx.globalAlpha = 0.9 * (1 - p * 0.5);
+      ctx.fillRect(x + sx - 1.5, top + p * len, 3, 7);
+    }
+  });
+  ctx.globalAlpha = 0.9;                                     // the jet on top bobs
+  ctx.fillRect(x - 1.5, y - 116 - Math.sin(t * 5) * 3, 3, 8);
+  ctx.globalAlpha = 1;
+}
+
+function flag(t, x, y, w, h) {                               // three stripes, waving more toward the free end
+  const wave = (u) => Math.sin(u / 9 - t * 3.2) * 4 * (0.25 + 0.75 * u / w);
+  const stripes = ['#c6543e', '#fff6de', '#c6543e'];
+  for (let u = 0; u < w; u += 2) {
+    const dy = wave(u), shade = 0.5 + 0.5 * Math.cos(u / 9 - t * 3.2);
+    stripes.forEach((col, i) => { ctx.fillStyle = col; ctx.fillRect(x + u, y + dy + i * h / 3, 2.4, h / 3 + 0.5); });
+    ctx.fillStyle = 'rgba(58, 36, 28, ' + (0.16 * shade).toFixed(3) + ')';
+    ctx.fillRect(x + u, y + dy, 2.4, h);
+  }
+  ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  for (let u = 0; u <= w; u += 2) ctx.lineTo(x + u, y + wave(u));
+  for (let u = w; u >= 0; u -= 2) ctx.lineTo(x + u, y + h + wave(u));
+  ctx.closePath(); ctx.stroke();
+}
+
+function glow(t, x, y, k) {                                  // a warm halo that breathes
+  const r = 46 + Math.sin(t * 1.7 + k) * 4, g = ctx.createRadialGradient(x, y, 2, x, y, r);
+  g.addColorStop(0, 'rgba(255, 244, 190, ' + (0.5 + Math.sin(t * 2.3 + k * 2) * 0.08).toFixed(3) + ')');
+  g.addColorStop(1, 'rgba(255, 236, 160, 0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+}
+
+function leaves(t, camX, camY, viewW, viewH) {               // a few leaves crossing whatever you are looking at
+  const colours = ['#e8963c', '#f0b4c0', '#8cb450', '#d27832', '#e696aa', '#aac864'];
+  for (let i = 0; i < 6; i++) {
+    const p = (t * (0.035 + hash(i, 1) * 0.03) + hash(i, 2)) % 1;
+    const x = camX + (p * 1.2 - 0.1) * viewW;
+    const y = camY + (hash(i, 4) * 0.8 + 0.1) * viewH + Math.sin(t * 1.4 + i * 2.1) * 34 + p * 60;
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(t * (1.2 + hash(i, 6)) + i);
+    ctx.fillStyle = colours[i % colours.length]; ctx.strokeStyle = INK; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.ellipse(0, 0, 8, 3.6, 0, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawEffects(t, camX, camY, viewW, viewH) {
+  const seen = (x, y, pad) => x > camX - pad && x < camX + viewW + pad && y > camY - pad && y < camY + viewH + pad;
+  FX.smoke.forEach(([x, y], k) => { if (seen(x, y, 200)) smoke(t, x, y, k); });
+  if (seen(FX.fountain[0], FX.fountain[1], 160)) water(t, FX.fountain[0], FX.fountain[1]);
+  if (seen(FX.flag[0], FX.flag[1], 120)) flag(t, ...FX.flag);
+  FX.lamps.forEach(([x, y], k) => { if (seen(x, y, 60)) glow(t, x, y, k); });
+  const beat = Math.floor(t * 5);
+  FX.bulbs.forEach(([x, y, size], k) => {                    // marquee bulbs chase along the sign
+    if (!seen(x, y, 20) || (k + beat) % 3) return;
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, y - 1, size + 2, size + 2);
+    ctx.fillStyle = 'rgba(255, 244, 190, 0.45)'; ctx.beginPath(); ctx.arc(x + size / 2, y + size / 2, 6, 0, 7); ctx.fill();
+  });
+  FX.lights.forEach(([x, y, size], k) => {                   // switchboard lamps blink on and off
+    if (!seen(x, y, 20)) return;
+    const n = hash(k, Math.floor(t * 1.5 + hash(k, 9) * 4));
+    ctx.fillStyle = n > 0.6 ? '#fade84' : n > 0.4 ? '#e86454' : '#3a2824';
+    ctx.fillRect(x, y, size, size);
+  });
+  FX.blink.forEach(([x, y]) => {                             // the newest price on the board pulses
+    if (!seen(x, y, 20)) return;
+    ctx.fillStyle = 'rgba(250, 236, 170, ' + (0.35 + 0.65 * Math.abs(Math.sin(t * 3))).toFixed(3) + ')';
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 7); ctx.fill();
+  });
+  leaves(t, camX, camY, viewW, viewH);
+}
+
+// ---------- sound ----------
+// Made in the browser, no sound files: a very quiet breeze and, now and then, a bird.
+// Browsers only allow sound after a key press or click, so it starts on the first one.
+let audio = null, muted = false;
+
+function chirp() {
+  if (!audio || muted) return;
+  const now = audio.ctx.currentTime, notes = 2 + Math.floor(Math.random() * 3), base = 2600 + Math.random() * 1600;
+  for (let i = 0; i < notes; i++) {
+    const osc = audio.ctx.createOscillator(), gain = audio.ctx.createGain(), at = now + i * 0.13;
+    osc.frequency.setValueAtTime(base * (1 + Math.random() * 0.15), at);
+    osc.frequency.exponentialRampToValueAtTime(base * (1.25 + Math.random() * 0.3), at + 0.07);
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(0.018, at + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.1);
+    osc.connect(gain).connect(audio.out);
+    osc.start(at); osc.stop(at + 0.12);
+  }
+}
+
+function startSound() {
+  if (audio) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  const actx = new AC(), out = actx.createGain();
+  out.connect(actx.destination);
+  const buffer = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate), data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const noise = actx.createBufferSource(), soft = actx.createBiquadFilter(), breeze = actx.createGain();
+  noise.buffer = buffer; noise.loop = true;
+  soft.type = 'lowpass'; soft.frequency.value = 420;
+  breeze.gain.value = 0.02;
+  const swell = actx.createOscillator(), depth = actx.createGain();   // the breeze rises and falls slowly
+  swell.frequency.value = 0.08; depth.gain.value = 0.008;
+  swell.connect(depth).connect(breeze.gain);
+  noise.connect(soft).connect(breeze).connect(out);
+  noise.start(); swell.start();
+  audio = { ctx: actx, out };
+  const nextBird = () => { chirp(); setTimeout(nextBird, 5000 + Math.random() * 14000); };
+  setTimeout(nextBird, 2500);
+}
+
+function toggleSound() {
+  muted = !muted;
+  if (audio) audio.out.gain.value = muted ? 0 : 1;
 }
 
 let last = 0;
@@ -137,8 +303,11 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 
+addEventListener('pointerdown', startSound);
 addEventListener('keydown', (event) => {
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  startSound();
+  if (key === 'm') toggleSound();
   if (MOVES[key]) { keys.add(key); hint.style.opacity = 0; event.preventDefault(); }
   else if (key === '+' || key === '=') setZoom(zoom * 1.25);
   else if (key === '-' || key === '_') setZoom(zoom / 1.25);

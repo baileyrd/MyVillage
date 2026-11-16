@@ -237,7 +237,6 @@ def smoke(c, x, y):
 def smokestack(c, x, base, top):
     bricks(c, x - 13, top, x + 13, base, mm.BRICK)
     c.box(x - 15, top - 4, x + 15, top + 6, DARK_BRICK)
-    smoke(c, x, top)
 
 
 def sawtooth_roof(c, x0=36, y0=40, x1=444, y1=229):
@@ -715,7 +714,6 @@ def family_home(c, i):
     c.rect(238, 312, 243, 316, RED)
     porch(c, ROOFS[0], 50 + i)
     gable_roof(c, ROOFS[0], 40 + i, chim=336)
-    smoke(c, 354, 44)
     for bx in (78, 402):
         shrub(c, bx, 372, mm.DARK_OAK, (244, 160, 170))
 
@@ -787,6 +785,13 @@ def house_shadow(c, i):
 # ---------- town hall (local origin: top-left of its 672 x 432 footprint) ----------
 
 HALL_FLAG = (132, 432 + 126)                                # flagpole foot on the lawn
+FLAG = (4, -198, 66, 39)                                    # the cloth, from the pole's foot: x, y, w, h
+
+# Where the page animates things, in each building's local pixels (index = house).
+CHIMNEYS = {0: (354, 42), 1: (126, 42), 3: (354, 42), 6: (354, 42), 7: (126, 42), 8: (126, 42), 9: (96, -36)}
+BULBS = {2: [(bx, by, 4) for by in (254, 277) for bx in range(165, 316, 9)]}                 # the studio marquee
+LIGHTS = {1: [(87 + k * 7, 267 + r * 7, 3) for r in range(5) for k in range(7)]}            # the switchboard
+BLINK = {5: [(82 + 52, 262 + 8)]}                                                           # end of the price line
 
 
 def hall(c):
@@ -886,14 +891,7 @@ def hall(c):
     c.box(px - 9, py - 8, px + 9, py, STONE)
     c.box(px - 3, py - 202, px + 3, py - 6, GREY)
     c.blob(disc(px, py - 205, 4, 4), BRASS3, px, py - 205, 4, 1)
-    for u in range(66):
-        dy = round(3 * math.sin(u / 9))
-        for v in range(39):
-            c.put(px + 4 + u, py - 198 + v + dy, CREAM[0] if 13 <= v < 26 else ACCENT[1])
-        c.put(px + 4 + u, py - 199 + dy, OUTLINE)
-        c.put(px + 4 + u, py - 159 + dy, OUTLINE)
-    for v in range(-1, 40):
-        c.put(px + 70, py - 198 + v + round(3 * math.sin(66 / 9)), OUTLINE)
+    # The cloth itself is drawn by the page, waving: see FLAG and index.html.
 
 
 def hall_shadow(c):
