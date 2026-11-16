@@ -553,6 +553,19 @@ YARDS = [                                                   # per house: (prop, 
 ]
 
 
+BODY = (34, -80, 426, 474)                                  # x, y, w, h: walls, roof, ordinary rooftop things
+REACH = {                                                   # per house: boxes for parts that stick out further
+    1: [(460, 60, 34, 66)],                                 # telephone wires
+    5: [(460, 108, 126, 76)],                               # telegraph wires
+    9: [(104, -100, 48, 20)],                               # top of the smoke
+}
+
+
+def cover(i):
+    """Local boxes inside which house i is redrawn over a walker standing behind it."""
+    return [BODY] + REACH.get(i, [])
+
+
 def mailbox(c):
     mx, my = MAILBOX
     c.box(mx - 2, my - 26, mx + 2, my, WOOD)

@@ -290,7 +290,7 @@ def town_data(sc):
         block_px(x - w // 2 + 2, y - depth, x + w // 2 - 2, y)
 
     for i, (ox, oy) in enumerate(sc['homes']):
-        things.append((ox + 34, oy - 80, 426, 474, oy + 376))
+        things += [(ox + x, oy + y, w, h, oy + 376) for x, y, w, h in buildings.cover(i)]
         stand(ox + buildings.MAILBOX[0], oy + buildings.MAILBOX[1], 26, 42, 10)
         for name, x, y in buildings.YARDS[i]:
             w, h, depth, _ = buildings.PROPS[name]
