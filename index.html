@@ -110,6 +110,8 @@ function draw() {
   ctx.imageSmoothingEnabled = scale < 1;   // crisp pixels zoomed in, clean shrink zoomed out
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(art.town, 0, 0);
+  const viewW = canvas.width / scale, viewH = canvas.height / scale;
+  drawEffects(false, camX, camY, viewW, viewH);
 
   const left = Math.round(me.x - FRAME_W / 2), top = Math.round(me.y - FRAME_H + 2);
   ctx.fillStyle = 'rgba(60, 38, 48, 0.32)';
@@ -127,7 +129,7 @@ function draw() {
     const x1 = Math.min(x + w, left + FRAME_W), y1 = Math.min(y + h, top + FRAME_H);
     if (x1 > x0 && y1 > y0) ctx.drawImage(art.objects, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
   }
-  drawEffects(performance.now() / 1000, camX, camY, canvas.width / scale, canvas.height / scale);
+  drawEffects(true, camX, camY, viewW, viewH);
 }
 
 // ---------- moving effects ----------
@@ -222,12 +224,24 @@ function leaves(t, camX, camY, viewW, viewH) {               // a few leaves cro
   }
 }
 
-function drawEffects(t, camX, camY, viewW, viewH) {
+// Lamps, flag and fountain stand on the ground, so they are drawn in two passes around the walker:
+// `front` false draws the ones behind the walker (and the lights on walls), true the ones in front.
+// With "reduce motion" switched on in the system, everything holds still and the leaves are left out.
+const still = matchMedia('(prefers-reduced-motion: reduce)');
+
+function drawEffects(front, camX, camY, viewW, viewH) {
+  const t = still.matches ? 0 : performance.now() / 1000;
   const seen = (x, y, pad) => x > camX - pad && x < camX + viewW + pad && y > camY - pad && y < camY + viewH + pad;
-  FX.smoke.forEach(([x, y], k) => { if (seen(x, y, 200)) smoke(t, x, y, k); });
-  if (seen(FX.fountain[0], FX.fountain[1], 160)) water(t, FX.fountain[0], FX.fountain[1]);
-  if (seen(FX.flag[0], FX.flag[1], 120)) flag(t, ...FX.flag);
-  FX.lamps.forEach(([x, y], k) => { if (seen(x, y, 60)) glow(t, x, y, k); });
+  const mine = (ground) => (ground > me.y) === front;
+  const [wx, wy, wground] = FX.fountain;
+  if (mine(wground) && seen(wx, wy, 160)) water(t, wx, wy);
+  if (mine(FX.flag[4]) && seen(FX.flag[0], FX.flag[1], 120)) flag(t, ...FX.flag);
+  FX.lamps.forEach(([x, y, ground], k) => { if (mine(ground) && seen(x, y, 60)) glow(t, x, y, k); });
+  if (front) {
+    FX.smoke.forEach(([x, y], k) => { if (seen(x, y, 200)) smoke(t, x, y, k); });
+    if (!still.matches) leaves(t, camX, camY, viewW, viewH);
+    return;
+  }
   const beat = Math.floor(t * 5);
   FX.bulbs.forEach(([x, y, size], k) => {                    // marquee bulbs chase along the sign
     if (!seen(x, y, 20) || (k + beat) % 3) return;
@@ -245,8 +259,8 @@ function drawEffects(t, camX, camY, viewW, viewH) {
     ctx.fillStyle = 'rgba(250, 236, 170, ' + (0.35 + 0.65 * Math.abs(Math.sin(t * 3))).toFixed(3) + ')';
     ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 7); ctx.fill();
   });
-  leaves(t, camX, camY, viewW, viewH);
 }
+
 
 // ---------- sound ----------
 // Made in the browser, no sound files: a very quiet breeze and, now and then, a bird.
@@ -307,7 +321,7 @@ addEventListener('pointerdown', startSound);
 addEventListener('keydown', (event) => {
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   startSound();
-  if (key === 'm') toggleSound();
+  if (key === 'm' && !event.repeat) toggleSound();
   if (MOVES[key]) { keys.add(key); hint.style.opacity = 0; event.preventDefault(); }
   else if (key === '+' || key === '=') setZoom(zoom * 1.25);
   else if (key === '-' || key === '_') setZoom(zoom / 1.25);

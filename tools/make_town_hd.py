@@ -269,7 +269,8 @@ def town_data(sc):
 
 
 def effects(sc):
-    """Where the page draws its moving effects, in map pixels."""
+    """Where the page draws its moving effects, in map pixels. Lamps, flag and fountain end with their
+    ground line, so the page can draw them behind a walker standing in front of them."""
     def spots(table):
         return [[ox + x, oy + y, *rest] for i, (ox, oy) in enumerate(sc['homes']) for x, y, *rest in
                 (table.get(i, []) if isinstance(table.get(i, []), list) else [table[i]])]
@@ -277,9 +278,9 @@ def effects(sc):
     lamps = list(sc['lamps']) + [(x, y) for name, x, y in sc['props'] if name == 'lamp']
     return dict(
         smoke=spots(buildings.CHIMNEYS), bulbs=spots(buildings.BULBS), lights=spots(buildings.LIGHTS),
-        blink=spots(buildings.BLINK), lamps=[[x, y - 100] for x, y in lamps],
-        flag=[fx + buildings.FLAG[0], fy + buildings.FLAG[1], buildings.FLAG[2], buildings.FLAG[3]],
-        fountain=[FX, FY])
+        blink=spots(buildings.BLINK), lamps=[[x, y - 100, y] for x, y in lamps],
+        flag=[fx + buildings.FLAG[0], fy + buildings.FLAG[1], buildings.FLAG[2], buildings.FLAG[3], fy],
+        fountain=[FX, FY, FY + 60])
 
 
 # ---------- the visitor (cell 48 x 64, feet at the bottom centre) ----------
