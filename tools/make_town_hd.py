@@ -22,33 +22,32 @@ from PIL import Image, ImageChops
 import buildings
 import make_maps as mm
 from kit import (FX, FY, GLOW, GRASS, GREY, PATH, PAVER, PX0, PX1, PY0, PY1, S, SQUARE, STONE, TH, TS,
-                 YARD, Canvas)
+                 YARD, Canvas, fleck)
 from make_maps import OUTLINE, WOOD, H, W, darker, disc, mix, noise
 
 # ---------- ground ----------
 
 def grass_px(pal, x, y, lawn):
-    base = (pal[3] if (x // 24) % 2 else pal[1]) if lawn else (
-        pal[3] if noise(x // 22, y // 22, 6) > .55 else pal[1])
-    n = noise(x, y // 3, 5)
-    col = pal[2] if n < .05 else pal[0] if n > .955 else base
-    return mix(col, pal[2], .45) if noise(x, y, 7) < .06 else col
+    """Clean grass: mown stripes on a lawn, flat green elsewhere, with a few two-pixel flecks."""
+    base = (pal[3] if (x // 24) % 2 else pal[1]) if lawn else pal[1]
+    f = fleck(x, y, 5, .007)
+    return pal[2] if f < 0 else pal[0] if f > 0 else base
 
 
 def slab_px(pal, x, y, checker=False):
     L, M, D, E = pal
     lx, ly = x % 96, y % 96
-    if lx == 0 or ly == 0:
+    if lx < 2 or ly < 2:
         return E
-    if lx == 1 or ly == 1:
+    if lx < 4 or ly < 4:
         return L
-    if lx == 95 or ly == 95:
+    if lx >= 94 or ly >= 94:
         return D
-    t, n = noise(x // 96, y // 96, 2), noise(x, y, 8)
+    t = noise(x // 96, y // 96, 2)
     base = mix(M, L, .4) if t > .7 else mix(M, D, .3) if t < .25 else M
     if checker and (x // 96 + y // 96) % 2:
         base = mix(base, D, .22)
-    return mix(base, D, .5) if n < .04 else L if n > .965 else base
+    return base
 
 
 def paver_px(u, v):
@@ -56,10 +55,10 @@ def paver_px(u, v):
     L, M, D, E = PAVER
     r = v // 12
     uu = u + (12 if r % 2 else 0)
-    if v % 12 == 0 or uu % 24 == 0:
+    if v % 12 < 2 or uu % 24 < 2:
         return E
     t = noise(uu // 24, r, 12)
-    return L if t > .66 else D if t < .24 else M
+    return L if t > .7 else D if t < .2 else M
 
 
 def square_px(x, y):
@@ -99,11 +98,11 @@ def draw_ground(c, g):
                     de = R - math.hypot(R - hx, R - vy) if hx < R and vy < R else min(hx, vy)
                     if de < 0:
                         col = grass_px(GRASS, x, y, False)
-                    elif de < 1.2:
-                        col = darker(PATH[3], .8)           # kerb
-                    elif de < 4:
-                        col = STONE[0]
+                    elif de < 2:
+                        col = OUTLINE                       # bold edge, like the rooms
                     elif de < 5:
+                        col = STONE[0]
+                    elif de < 6:
                         col = PATH[2]
                     else:
                         col = square_px(x, y) if k == 'Q' else slab_px(PATH, x, y)
@@ -112,16 +111,15 @@ def draw_ground(c, g):
 
 def draw_decor(c, g, rng):
     """Grass tufts, flowers and pebbles on open ground."""
-    for _ in range(5200):
+    for _ in range(3000):
         x, y = rng.randrange(8, c.w - 8), rng.randrange(8, c.h - 8)
         if any(g[(y + dy) // TS][(x + dx) // TS] not in 'GY' for dx in (-7, 7) for dy in (-7, 7)):
             continue
         pal, roll = (YARD if g[y // TS][x // TS] == 'Y' else GRASS), rng.random()
         if roll < .55:                                      # tuft
-            for dx, hgt in ((-3, 5), (0, 8), (3, 6)):
-                for k in range(hgt):
-                    c.put(x + dx + (k // 4) * (1 if dx > 0 else -1 if dx < 0 else 0), y - k,
-                          pal[0] if k >= hgt - 2 else pal[2])
+            for dx, hgt in ((-4, 4), (0, 8), (4, 6)):
+                c.rect(x + dx, y - hgt, x + dx + 2, y, pal[2])
+                c.rect(x + dx, y - hgt, x + dx + 2, y - hgt + 2, pal[0])
         elif roll < .9:                                     # flower
             petal = rng.choice(TH['flowers'])
             c.rect(x, y + 2, x + 1, y + 7, pal[2])
@@ -129,7 +127,7 @@ def draw_decor(c, g, rng):
                 c.rect(x - 1 + dx, y - 1 + dy, x + 2 + dx, y + 2 + dy, petal)
             c.rect(x - 1, y - 1, x + 2, y + 2, (250, 214, 110))
         else:
-            c.blob(disc(x, y, rng.randrange(3, 6), rng.randrange(2, 4)), STONE, x, y, 5, x)
+            c.ball(x, y, rng.randrange(3, 6), rng.randrange(2, 4), STONE)
 
 
 # ---------- square furniture ----------
@@ -194,38 +192,19 @@ def bench(c, x, y):
 
 
 def tree(c, cx, by, pal, seed):
+    """A trunk and five smooth lobes of leaves, each with a bold outline and a glint."""
     rng = random.Random(seed)
-    for y in range(by - 42, by):                            # trunk with root flare
+    for y in range(by - 44, by):                            # trunk with root flare
         half = 7 + max(0, y - by + 8) // 2
         for x in range(cx - half, cx + half + 1):
-            edge = abs(x - cx) == half
-            bark = WOOD[0] if x < cx - 3 else WOOD[2] if x > cx + 3 or noise(x // 2, y // 5, seed) < .25 else WOOD[1]
-            c.put(x, y, OUTLINE if edge else bark)
-    c.rect(cx - 11, by, cx + 12, by + 1, OUTLINE)
-    ccy = by - 72
-    pts = disc(cx, ccy, 45, 39) | disc(cx - 27, by - 51, 27, 24) | disc(cx + 27, by - 51, 27, 24) | disc(cx, by - 96, 30, 24)
-    for k in range(10):                                     # lumpy edge
-        a = k * math.pi / 5 + rng.random() * .4
-        pts |= disc(cx + int(44 * math.cos(a)), ccy + int(36 * math.sin(a)) - 4, rng.randint(9, 13), rng.randint(8, 11))
-    tone = {}
-    for x, y in pts:
-        d, n = ((x - cx) + (y - ccy)) / 73, noise(x, y, seed)
-        tone[x, y] = 1 if d < -.28 + (n - .5) * .2 else 3 if d > .3 + (n - .5) * .2 else 2
-    for _ in range(70):                                     # leaf clumps
-        px, py, r = cx + rng.randint(-56, 56), ccy + rng.randint(-50, 48), rng.randint(5, 8)
-        if (px, py) not in pts:
-            continue
-        for q in disc(px, py, r, r - 1):
-            if q in tone:
-                s = (q[0] - px) + (q[1] - py)
-                tone[q] = max(0, tone[q] - 1) if s < -r * .35 else min(4, tone[q] + 1) if s > r * .6 else tone[q]
-    ramp = (mix(pal[0], (255, 250, 220), .35), pal[0], pal[1], pal[2], darker(pal[2], .8))
-    for (x, y), t in tone.items():
-        c.put(x, y, ramp[t])
-    ring = {(x + dx, y + dy) for x, y in pts for dx in (-1, 0, 1) for dy in (-1, 0, 1)} - pts
-    ring |= {(x + dx, y + dy) for x, y in ring for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))} - pts
-    for q in ring:
-        c.put(*q, OUTLINE)
+            edge = abs(x - cx) >= half - 1
+            c.put(x, y, OUTLINE if edge else WOOD[0] if x < cx - 3 else WOOD[2] if x > cx + 3 else WOOD[1])
+    c.rect(cx - 11, by, cx + 12, by + 2, OUTLINE)
+    j = [rng.randint(-3, 3) for _ in range(6)]
+    lobes = ((0, -92, 28, 24), (-30, -70 + j[0], 28, 24), (30, -68 + j[1], 28, 24),
+             (-18 + j[2], -50, 26, 20), (20 + j[3], -48, 26, 20), (j[4], -66, 32, 26))
+    for dx, dy, rx, ry in lobes:
+        c.ball(cx + dx, by + dy, rx, ry, pal)
 
 
 def scene():
