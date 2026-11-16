@@ -60,6 +60,25 @@ class Canvas(mm.Canvas):
     def cast(self, pts):
         self.shadow |= {(x + self.ox, y + self.oy) for x, y in pts}
 
+    def blob(self, pts, pal, cx, cy, r, seed):
+        """Shaded, outlined shape lit from the upper left, in three clean bands of colour."""
+        L, M, D = pal
+        for x, y in pts:
+            d = ((x - cx) + (y - cy)) / (r * 1.4)
+            self.put(x, y, L if d < -.3 else D if d > .32 else M)
+        for x, y in pts:
+            for q in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if q not in pts:
+                    self.put(*q, OUTLINE)
+
+    def ball(self, x, y, rx, ry, pal):
+        """A smooth lobe with a bold outline and a glint, like the plants in the rooms."""
+        for px, py in disc(x, y, rx + 1, ry + 1):
+            self.put(px, py, OUTLINE)
+        self.blob(disc(x, y, rx, ry), pal, x, y, max(rx, ry), 0)
+        for px, py in disc(x - rx * 2 // 5, y - ry * 2 // 5, max(2, rx // 5), max(1, ry // 6)):
+            self.put(px, py, mix(pal[0], (255, 252, 230), .5))
+
     def frame2(self, x0, y0, x1, y1):
         self.frame(x0, y0, x1, y1)
         self.frame(x0 - 1, y0 - 1, x1 + 1, y1 + 1)
@@ -82,24 +101,27 @@ MARBLE = ((250, 242, 222), (228, 214, 188), (192, 174, 148))
 
 # ---------- shared building parts ----------
 
+def fleck(x, y, seed, rate=.012):
+    """-1, 0 or 1: sparse two-pixel flecks, so flat surfaces stay clean but not dead."""
+    n = noise(x // 2, y // 2, seed)
+    return -1 if n < rate else 1 if n > 1 - rate else 0
+
+
 def shingles(c, x0, y0, x1, y1, pal, seed, ridge=None):
+    """Clean courses of shingles: 8 pixels deep, 16 wide, with two-pixel shadow lines."""
     L, M, D = pal
     for y in range(y0, y1):
         for x in range(x0, x1):
-            fx, ry, n = (x - x0) / (x1 - x0), y - y0, noise(x, y, seed)
-            r = ry // 6
-            xx = x + (5 if r % 2 else 0)
-            t = noise(xx // 10, r, seed + 1)
-            base = mix(M, L, .35) if t > .75 else mix(M, D, .3) if t < .2 else M
-            col = D if ry % 6 == 5 or xx % 10 == 0 else mix(base, L, .6) if ry % 6 == 0 else base
+            ry = y - y0
+            r = ry // 8
+            xx = x + (8 if r % 2 else 0)
+            t = noise(xx // 16, r, seed + 1)
+            base = mix(M, L, .3) if t > .8 else mix(M, D, .25) if t < .15 else M
+            col = D if ry % 8 >= 6 or xx % 16 < 2 else mix(base, L, .5) if ry % 8 == 0 else base
             if ridge and y < ridge:
                 col = mix(col, darker(D, .8), .45)          # far slope
             elif ridge and y < ridge + 4:
-                col = M if y == ridge + 3 else L            # ridge cap
-            elif fx < .35 and n < (.35 - fx) * 1.6:
-                col = mix(col, L, .5)
-            elif fx > .7 and n < (fx - .7) * 2:
-                col = mix(col, D, .6)
+                col = M if y >= ridge + 2 else L            # ridge cap
             c.put(x, y, col)
 
 
@@ -185,26 +207,29 @@ def wall_fill(c, style, pal, seed, x0=48, y0=226, x1=432, y1=376):
     L, M, D = pal
     for y in range(y0, y1):
         for x in range(x0, x1):
-            ry, n = y - y0, noise(x, y, seed)
+            ry = y - y0
             if style == 'siding':
-                col = D if ry % 8 == 7 else L if ry % 8 == 0 else mix(M, D, .25) if n < .05 else M
+                col = D if ry % 8 >= 6 else L if ry % 8 == 0 else M
             elif style == 'brick':
-                r = ry // 6
-                xx = x - x0 + (6 if r % 2 else 0)
-                t = noise(xx // 12, r, seed)
-                col = mix(L, (255, 244, 220), .45) if ry % 6 == 5 or xx % 12 == 0 else D if t < .28 else L if t > .8 else M
+                r = ry // 8
+                xx = x - x0 + (8 if r % 2 else 0)
+                t = noise(xx // 16, r, seed)
+                col = mix(L, (255, 244, 220), .45) if ry % 8 >= 6 or xx % 16 < 2 else D if t < .2 else L if t > .85 else M
             elif style == 'stone':
                 r = ry // 12
                 xx = x - x0 + (12 if r % 2 else 0)
                 t = noise(xx // 24, r, seed)
-                col = (D if ry % 12 == 11 or xx % 24 == 0 else L if ry % 12 == 0 or xx % 24 == 1
+                col = (D if ry % 12 >= 10 or xx % 24 < 2 else L if ry % 12 == 0 or xx % 24 == 2
                        else mix(M, L, .5) if t > .7 else mix(M, D, .3) if t < .2 else M)
             else:                                           # stucco
-                col = L if n > .93 else mix(M, D, .5) if n < .04 else M
-            if ry < 9 or (ry < 12 and n < .5) or (x1 - x < 34 and n < (x - x1 + 34) / 40):
-                col = darker(col, .78)
+                f = fleck(x, y, seed)
+                col = L if f > 0 else mix(M, D, .4) if f < 0 else M
+            if ry < 10:
+                col = darker(col, .78)                      # shade under the eave
+            elif x1 - x <= 10:
+                col = darker(col, .88)
             if y1 - y <= 10:                                # foundation blocks
-                col = STONE[2] if (x - x0) % 24 == 0 or y1 - y == 10 else STONE[1]
+                col = STONE[2] if (x - x0) % 24 < 2 or y1 - y >= 9 else STONE[1]
             c.put(x, y, col)
     for bx in ((x0, x1 - 8) if style == 'siding' else ()):  # corner boards
         c.rect(bx, y0 + 6, bx + 8, y1 - 10, CREAM[1])
@@ -237,12 +262,13 @@ def flat_roof(c, pal, seed, x0=36, y0=40, x1=444, y1=229):
     L, M, D = pal
     for y in range(y0, y1):
         for x in range(x0, x1):
-            e, n = min(x - x0, x1 - 1 - x, y - y0, y1 - 1 - y), noise(x, y, seed)
+            e = min(x - x0, x1 - 1 - x, y - y0, y1 - 1 - y)
             if e < 12:
                 col = M if (x1 - 1 - x < 12 or y1 - 1 - y < 12) else L
-                col = darker(D, .9) if e == 11 else mix(col, (255, 250, 232), .5) if e == 1 else col
+                col = darker(D, .9) if e >= 10 else mix(col, (255, 250, 232), .5) if e in (1, 2) else col
             else:
-                col = D if n < .1 else L if n > .93 else mix(M, D, .3) if noise(x, y, seed + 1) < .2 else M
+                f = fleck(x, y, seed, .01)
+                col = D if f < 0 else L if f > 0 else M
                 if min(x - x0, y - y0) < 22:
                     col = darker(col, .82)                  # shade just inside the parapet
             c.put(x, y, col)
