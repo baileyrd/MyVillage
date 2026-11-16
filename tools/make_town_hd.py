@@ -2,9 +2,9 @@
 """Draw the 1950s town at three times the detail (48-pixel tiles, 3840 x 2880).
 
 Usage: python make_town_hd.py OUT_DIR
-Needs Pillow and make_maps.py beside it. The layout (houses, hall, square,
-paths, yards, tree positions) comes from make_maps.py unchanged, so one tile
-here is exactly one tile there, three times larger. Writes into OUT_DIR:
+Needs Pillow, with make_maps.py, kit.py and buildings.py beside it. The layout
+(houses, hall, square, paths, yards, tree positions) comes from make_maps.py
+unchanged. Writes into OUT_DIR:
   town-1950s-hd.png       the finished map
   town-1950s-objects.png  only the things that stand up (see-through elsewhere),
                           so the page can draw them in front of a walker
@@ -19,69 +19,11 @@ from pathlib import Path
 
 from PIL import Image, ImageChops
 
+import buildings
 import make_maps as mm
-from make_maps import OUTLINE, SHADOW, WOOD, H, W, darker, disc, mix, noise
-
-S = 3
-TS = mm.T * S
-TH = mm.THEMES[4]
-GRASS = TH['grass']
-YARD = tuple(mix(col, (240, 226, 150), .22) for col in GRASS)
-CREAM = ((255, 246, 222), (240, 226, 192), (204, 186, 152))
-STONE = ((236, 226, 208), (208, 196, 178), (164, 152, 140))
-GREY = ((150, 138, 138), (112, 100, 104), (78, 66, 74))
-PATH = ((234, 224, 206), (216, 206, 188), (192, 182, 166), (166, 152, 138))
-SQUARE = ((244, 230, 206), (230, 212, 186), (206, 188, 164), (176, 156, 134))
-PAVER = ((226, 152, 114), (202, 124, 94), (172, 98, 78), (140, 78, 64))
-ACCENT = ((226, 110, 80), (198, 84, 62), (150, 60, 50))
-GLOW = ((255, 246, 196), (250, 222, 132), (226, 180, 90))
-BRASS = (238, 198, 98)
-ROOFS = [p for _, p in TH['roofs']]
-SIDINGS = [p for _, p in TH['walls']]
-WALL_OF_HOUSE = [2, 0, 3, 2, 0, 2, 1, 0, 1, 0]
-TRIMS = [((198, 98, 74), (166, 70, 56), (122, 48, 44)),       # shutter and door colours
-         ((150, 164, 104), (116, 132, 80), (80, 96, 60)),
-         ((182, 128, 88), (146, 96, 64), (104, 66, 46)),
-         ((150, 118, 128), (120, 92, 106), (86, 64, 78))]
-PX0, PY0 = mm.PLAZA[0] * TS, mm.PLAZA[1] * TS
-PX1, PY1 = PX0 + mm.PLAZA[2] * TS, PY0 + mm.PLAZA[3] * TS
-FX, FY = (PX0 + PX1) // 2, (PY0 + PY1) // 2
-
-
-class Canvas(mm.Canvas):
-    """A canvas with a movable origin, so each object draws in local coordinates."""
-
-    def __init__(self, w, h):
-        self.im = Image.new('RGB', (w, h))
-        self.p, self.w, self.h = self.im.load(), w, h
-        self.shadow, self.ox, self.oy = set(), 0, 0
-
-    def at(self, ox, oy):
-        self.ox, self.oy = ox, oy
-        return self
-
-    def put(self, x, y, c):
-        x, y = x + self.ox, y + self.oy
-        if 0 <= x < self.w and 0 <= y < self.h:
-            self.p[x, y] = c
-
-    def get(self, x, y):
-        return self.p[min(self.w - 1, max(0, x + self.ox)), min(self.h - 1, max(0, y + self.oy))]
-
-    def dim(self, x, y, a=.3):
-        self.put(x, y, mix(self.get(x, y), SHADOW, a))
-
-    def cast(self, pts):
-        self.shadow |= {(x + self.ox, y + self.oy) for x, y in pts}
-
-    def frame2(self, x0, y0, x1, y1):
-        self.frame(x0, y0, x1, y1)
-        self.frame(x0 - 1, y0 - 1, x1 + 1, y1 + 1)
-
-
-def block(x0, y0, x1, y1):
-    return {(x, y) for x in range(x0, x1) for y in range(y0, y1)}
-
+from kit import (FX, FY, GLOW, GRASS, GREY, PATH, PAVER, PX0, PX1, PY0, PY1, S, SQUARE, STONE, TH, TS,
+                 YARD, Canvas)
+from make_maps import OUTLINE, WOOD, H, W, darker, disc, mix, noise
 
 # ---------- ground ----------
 
@@ -188,302 +130,6 @@ def draw_decor(c, g, rng):
             c.rect(x - 1, y - 1, x + 2, y + 2, (250, 214, 110))
         else:
             c.blob(disc(x, y, rng.randrange(3, 6), rng.randrange(2, 4)), STONE, x, y, 5, x)
-
-
-# ---------- shared building parts ----------
-
-def shingles(c, x0, y0, x1, y1, pal, seed, ridge=None):
-    L, M, D = pal
-    for y in range(y0, y1):
-        for x in range(x0, x1):
-            fx, ry, n = (x - x0) / (x1 - x0), y - y0, noise(x, y, seed)
-            r = ry // 6
-            xx = x + (5 if r % 2 else 0)
-            t = noise(xx // 10, r, seed + 1)
-            base = mix(M, L, .35) if t > .75 else mix(M, D, .3) if t < .2 else M
-            col = D if ry % 6 == 5 or xx % 10 == 0 else mix(base, L, .6) if ry % 6 == 0 else base
-            if ridge and y < ridge:
-                col = mix(col, darker(D, .8), .45)          # far slope
-            elif ridge and y < ridge + 4:
-                col = M if y == ridge + 3 else L            # ridge cap
-            elif fx < .35 and n < (.35 - fx) * 1.6:
-                col = mix(col, L, .5)
-            elif fx > .7 and n < (fx - .7) * 2:
-                col = mix(col, D, .6)
-            c.put(x, y, col)
-
-
-def bricks(c, x0, y0, x1, y1, pal):
-    L, M, D = pal
-    for y in range(y0, y1):
-        for x in range(x0, x1):
-            r = (y - y0) // 5
-            xx = x - x0 + (5 if r % 2 else 0)
-            col = L if (y - y0) % 5 == 4 or xx % 10 == 0 else D if noise(xx // 10, r, 9) < .3 else M
-            if x - x0 < 4:
-                col = mix(col, L, .4)
-            if x1 - x <= 6:
-                col = darker(col, .8)
-            c.put(x, y, col)
-    c.frame2(x0, y0, x1, y1)
-
-
-def glass(c, x0, y0, w, h, curtains=False):
-    for yr in range(h):
-        for xr in range(w):
-            col = mix((128, 170, 174), (68, 104, 118), int((xr + yr) / (w + h) * 5) / 5)
-            s = xr + yr - w // 2
-            if -3 <= s < 1 or 6 <= s < 8:
-                col = mix(col, mm.GLINT, .55)
-            side = min(xr, w - 1 - xr)
-            if curtains and yr < h * .82 and side < int(w * .34 - w * .24 * yr / h):
-                col = CREAM[2] if side % 4 == 3 else CREAM[0] if side % 4 == 0 else CREAM[1]
-            c.put(x0 + xr, y0 + yr, col)
-
-
-def window(c, x0, y0, w, h, cols=2, rows=2, shutters=None, flowers=False, curtains=False):
-    c.rect(x0 - 4, y0 - 4, x0 + w + 4, y0 + h + 4, CREAM[1])
-    c.rect(x0 - 4, y0 - 4, x0 + w + 4, y0 - 2, CREAM[0])
-    c.frame(x0 - 5, y0 - 5, x0 + w + 5, y0 + h + 5)
-    glass(c, x0, y0, w, h, curtains)
-    for i in range(1, cols):
-        c.rect(x0 + w * i // cols - 1, y0, x0 + w * i // cols + 1, y0 + h, CREAM[0])
-    for j in range(1, rows):
-        yy = y0 + h * j // rows
-        c.rect(x0, yy - 1, x0 + w, yy + 2, CREAM[0])
-        c.rect(x0, yy + 2, x0 + w, yy + 3, (60, 92, 104))
-    c.frame(x0 - 1, y0 - 1, x0 + w + 1, y0 + h + 1)
-    for sx in ((x0 - 20, x0 + w + 6) if shutters else ()):  # louvred shutters
-        for y in range(y0 - 4, y0 + h + 4):
-            k = (y - y0) % 4
-            c.rect(sx, y, sx + 14, y + 1, shutters[2] if k == 3 else shutters[0] if k == 0 else shutters[1])
-        c.frame(sx - 1, y0 - 5, sx + 15, y0 + h + 5)
-    c.box(x0 - 8, y0 + h + 5, x0 + w + 8, y0 + h + 10, CREAM)
-    if flowers:
-        c.box(x0 - 5, y0 + h + 13, x0 + w + 5, y0 + h + 23, WOOD)
-        for i, k in enumerate(range(x0 - 2, x0 + w + 2, 7)):
-            c.blob(disc(k + 2, y0 + h + 11, 4, 4), mm.OAK, k + 2, y0 + h + 11, 4, i)
-            c.rect(k + 1, y0 + h + 7, k + 4, y0 + h + 10,
-                   ((226, 80, 70), (250, 214, 110), (244, 160, 170))[i % 3])
-            c.put(k + 2, y0 + h + 8, (255, 244, 200))
-
-
-def steps(c, cx, y, widths, rise=9):
-    for i, half in enumerate(widths):
-        sy = y + i * rise
-        c.rect(cx - half, sy, cx + half, sy + rise, STONE[0])
-        c.rect(cx - half, sy + rise - 3, cx + half, sy + rise, STONE[2])
-        c.rect(cx + half - 4, sy, cx + half, sy + rise, STONE[2])
-        c.frame(cx - half - 1, sy - 1, cx + half + 1, sy + rise + 1)
-
-
-def shrub(c, bx, by, pal, flower=None):
-    pts = disc(bx, by - 6, 20, 13) | disc(bx - 15, by, 11, 9) | disc(bx + 15, by, 11, 9)
-    c.blob(pts, pal, bx, by - 6, 22, bx)
-    for i in range(7 if flower else 0):
-        fx, fy = bx - 18 + i * 6, by - 12 + (i * 5) % 11
-        c.rect(fx, fy, fx + 2, fy + 2, flower)
-
-
-# ---------- house (local origin: wall spans x 48..432, roof top at y 40) ----------
-
-def house(c, i):
-    roof_pal, side_pal = ROOFS[i % 4], SIDINGS[WALL_OF_HOUSE[i]]
-    trim, door_pal = TRIMS[(i + i // 4) % 4], TRIMS[(i * 3 + 1) % 4]
-    chim = 336 if i % 2 == 0 else 108
-    L, M, D = side_pal
-    for y in range(226, 376):                               # siding
-        for x in range(48, 432):
-            ry, n = y - 226, noise(x, y, 30 + i)
-            col = D if ry % 8 == 7 else L if ry % 8 == 0 else mix(M, D, .25) if n < .05 else M
-            if ry < 9 or (ry < 12 and n < .5) or (432 - x < 34 and n < (x - 398) / 40):
-                col = darker(col, .78)
-            if y >= 366:                                    # foundation blocks
-                col = STONE[2] if (x - 48) % 24 == 0 or y == 366 else STONE[1]
-            c.put(x, y, col)
-    for x0 in (48, 424):                                    # corner boards
-        c.rect(x0, 232, x0 + 8, 366, CREAM[1])
-        c.rect(x0, 232, x0 + 2, 366, CREAM[0])
-        c.rect(x0 + 7, 232, x0 + 8, 366, CREAM[2])
-    c.frame2(48, 226, 432, 376)
-    for wx in (84, 342):
-        window(c, wx, 262, 54, 54, shutters=trim, flowers=True, curtains=True)
-
-    x0, x1, y0, y1 = 216, 264, 288, 370                     # front door
-    c.rect(x0 - 6, y0 - 6, x1 + 6, y1, CREAM[1])
-    c.rect(x0 - 6, y0 - 6, x0 - 4, y1, CREAM[0])
-    c.frame(x0 - 7, y0 - 7, x1 + 7, y1 + 1)
-    for y in range(y0, y1):
-        for x in range(x0, x1):
-            c.put(x, y, door_pal[0] if x - x0 < 3 else door_pal[2] if x1 - x <= 3 else door_pal[1])
-    c.frame(x0 - 1, y0 - 1, x1 + 1, y1 + 1)
-    for k in range(3):                                      # three little panes
-        glass(c, x0 + 7 + k * 12, y0 + 8, 10, 13)
-        c.frame(x0 + 6 + k * 12, y0 + 7, x0 + 18 + k * 12, y0 + 22)
-    for px in (x0 + 6, x0 + 26):                            # raised panels
-        for py, ph in ((y0 + 28, 20), (y0 + 54, 22)):
-            c.rect(px, py, px + 16, py + ph, mix(door_pal[1], door_pal[2], .35))
-            c.rect(px, py, px + 16, py + 1, door_pal[2])
-            c.rect(px, py, px + 1, py + ph, door_pal[2])
-            c.rect(px, py + ph - 1, px + 16, py + ph, door_pal[0])
-            c.rect(px + 15, py, px + 16, py + ph, door_pal[0])
-    c.rect(x1 - 8, y0 + 48, x1 - 4, y0 + 52, BRASS)
-    c.put(x1 - 8, y0 + 48, (255, 240, 180))
-    c.rect(x1 - 8, y0 + 52, x1 - 4, y0 + 53, door_pal[2])
-    steps(c, 240, y1, (36, 46))
-    c.box(x0 - 22, y0 + 10, x0 - 14, y0 + 24, GLOW)         # porch lamp
-    c.box(x0 - 23, y0 + 7, x0 - 13, y0 + 11, GREY)
-
-    for y in range(278, 285):                               # porch roof and its shadow
-        for x in range(200, 288):
-            c.dim(x, y)
-    shingles(c, 196, 258, 284, 278, roof_pal, 50 + i)
-    c.rect(196, 274, 284, 278, CREAM[1])
-    c.rect(196, 274, 284, 275, CREAM[0])
-    c.frame2(196, 258, 284, 278)
-    for k in range(10):                                     # brackets
-        c.rect(202 + k, 279 + k, 205 + k, 280 + k, OUTLINE)
-        c.rect(275 - k, 279 + k, 278 - k, 280 + k, OUTLINE)
-
-    shingles(c, 36, 40, 444, 226, roof_pal, 40 + i, ridge=84)
-    for y in range(72, 140):                                # chimney shadow on the roof
-        for x in range(chim + 14, chim + 56):
-            if x >= chim + 36 or y >= 126:
-                c.dim(x, y)
-    c.rect(36, 40, 40, 226, CREAM[1])
-    c.rect(440, 40, 444, 226, CREAM[2])
-    c.rect(36, 219, 444, 226, CREAM[1])
-    c.rect(36, 219, 444, 221, CREAM[0])
-    c.rect(36, 224, 444, 226, CREAM[2])
-    c.frame2(36, 40, 444, 226)
-    bricks(c, chim, 62, chim + 36, 126, mm.BRICK)
-    c.box(chim - 5, 53, chim + 41, 63, STONE)
-    for px in (chim + 5, chim + 21):
-        c.box(px, 45, px + 10, 54, mm.TERRACOTTA[0])
-    if i % 3 != 1:                                          # television aerial
-        ax = 480 - chim - 18
-        c.box(ax - 2, 12, ax + 2, 66, GREY)
-        c.box(ax - 6, 62, ax + 6, 68, GREY)
-        for y, half in ((16, 15), (25, 11), (34, 7)):
-            c.rect(ax - half, y, ax + half, y + 2, GREY[2])
-    for bx in (78, 402):
-        shrub(c, bx, 372, mm.DARK_OAK, ((244, 160, 170), (250, 244, 220), (250, 214, 110))[i % 3])
-
-    mx, my = 164, 376 + 3 * TS - 16                         # mailbox by the path
-    c.box(mx - 2, my - 26, mx + 2, my, WOOD)
-    c.box(mx - 10, my - 38, mx + 10, my - 25, ((232, 228, 220), (196, 192, 188), (146, 140, 142)))
-    c.rect(mx + 10, my - 40, mx + 13, my - 30, ACCENT[1])
-    c.frame(mx + 9, my - 41, mx + 14, my - 29)
-
-
-def house_shadow(c):
-    c.cast({p for p in block(60, 120, 458, 394) if p[0] >= 432 or p[1] >= 376})
-    c.cast(disc(86, 380, 26, 8) | disc(410, 380, 26, 8) | disc(170, 376 + 3 * TS - 15, 10, 3))
-
-
-# ---------- town hall (local origin: top-left of its 672 x 432 footprint) ----------
-
-def hall(c):
-    wd, ht, rh, cx = 672, 432, 228, 336
-    L, M, D = CREAM
-    for y in range(rh, ht):                                 # stucco wall
-        for x in range(wd):
-            n = noise(x, y, 77)
-            col = L if n > .93 else mix(M, D, .5) if n < .04 else M
-            if rh + 16 <= y < rh + 22:
-                col = ACCENT[1] if y < rh + 21 else ACCENT[2]
-            if y - rh < 12 or (y - rh < 15 and n < .5) or (wd - x < 50 and n < (x - wd + 50) / 60):
-                col = darker(col, .78)
-            if ht - y <= 16:
-                col = STONE[2] if x % 32 == 0 or ht - y == 16 else STONE[1]
-            c.put(x, y, col)
-    c.frame2(0, rh, wd, ht)
-    for wx in (42, 150, 462, 570):
-        window(c, wx, rh + 46, 60, 84, cols=2, rows=3)
-
-    x0, x1, y0 = cx - 45, cx + 45, ht - 128                 # glass double doors
-    c.rect(x0 - 7, y0 - 24, x1 + 7, ht, CREAM[1])
-    c.rect(x0 - 7, y0 - 24, x0 - 5, ht, CREAM[0])
-    c.frame(x0 - 8, y0 - 25, x1 + 8, ht + 1)
-    for k in range(3):                                      # transom
-        glass(c, x0 + 1 + k * 30, y0 - 19, 28, 13)
-        c.frame(x0 + k * 30, y0 - 20, x0 + 30 + k * 30, y0 - 5)
-    for lx in (x0, cx + 1):
-        c.rect(lx, y0, lx + 44, ht, WOOD[1])
-        c.rect(lx, y0, lx + 2, ht, WOOD[0])
-        c.rect(lx + 42, y0, lx + 44, ht, WOOD[2])
-        glass(c, lx + 7, y0 + 7, 30, 96)
-        c.frame(lx + 6, y0 + 6, lx + 38, y0 + 104)
-        c.rect(lx + 2, ht - 14, lx + 42, ht - 3, BRASS)
-        c.rect(lx + 2, ht - 5, lx + 42, ht - 3, (190, 150, 70))
-        c.frame(lx - 1, y0 - 1, lx + 45, ht + 1)
-    for hx in (cx - 8, cx + 5):
-        c.rect(hx, y0 + 52, hx + 3, y0 + 74, BRASS)
-        c.frame(hx - 1, y0 + 51, hx + 4, y0 + 75)
-
-    for y in range(rh + 48, rh + 58):                       # canopy and its shadow
-        for x in range(cx - 92, cx + 100):
-            c.dim(x, y)
-    c.rect(cx - 96, rh + 26, cx + 96, rh + 48, ACCENT[1])
-    c.rect(cx - 96, rh + 26, cx + 96, rh + 38, ACCENT[0])
-    c.rect(cx - 96, rh + 45, cx + 96, rh + 48, ACCENT[2])
-    c.frame2(cx - 96, rh + 26, cx + 96, rh + 48)
-    for px in (cx - 90, cx + 84):
-        c.box(px, rh + 49, px + 6, ht + 1, GREY)
-    steps(c, cx, ht, (66, 78, 90))
-    for bx in (cx - 132, cx + 132):                         # planters
-        c.box(bx - 17, ht - 8, bx + 17, ht + 12, mm.TERRACOTTA[0])
-        shrub(c, bx, ht - 14, mm.OAK, (244, 160, 170))
-
-    rx0, rx1, ry1 = -12, wd + 12, rh + 3                    # flat gravel roof with parapet
-    RL, RM, RD = TH['hall_roof'][1]
-    for y in range(0, ry1):
-        for x in range(rx0, rx1):
-            e, n = min(x - rx0, rx1 - 1 - x, y, ry1 - 1 - y), noise(x, y, 78)
-            near = min(x - rx0, y)
-            if e < 12:
-                col = RM if (rx1 - 1 - x < 12 or ry1 - 1 - y < 12) else RL
-                col = darker(RD, .9) if e == 11 else mix(col, (255, 250, 232), .5) if e == 1 else col
-            else:
-                col = RD if n < .1 else RL if n > .93 else mix(RM, RD, .3) if noise(x, y, 79) < .2 else RM
-                if near < 22:
-                    col = darker(col, .82)                  # shade just inside the parapet
-            c.put(x, y, col)
-    c.frame2(rx0, 0, rx1, ry1)
-    for x, y in block(306, 76, 318, 162) | block(156, 150, 318, 162):
-        c.dim(x, y)
-    c.rect(150, 70, 306, 150, CREAM[1])                     # skylight
-    for k in range(3):
-        for j in range(2):
-            glass(c, 156 + k * 50, 76 + j * 37, 44, 31)
-            c.frame(155 + k * 50, 75 + j * 37, 201 + k * 50, 108 + j * 37)
-    c.frame2(150, 70, 306, 150)
-    for vx, vy, vw, vh in ((430, 60, 50, 42), (524, 112, 62, 50)):   # roof vents
-        for x, y in block(vx + vw, vy + 8, vx + vw + 10, vy + vh + 10) | block(vx + 8, vy + vh, vx + vw + 10, vy + vh + 10):
-            c.dim(x, y)
-        c.box(vx, vy, vx + vw, vy + vh, GREY)
-        c.rect(vx + 2, vy + 2, vx + vw - 2, vy + 10, GREY[0])
-        for yy in range(vy + 16, vy + vh - 4, 5):
-            c.rect(vx + 6, yy, vx + vw - 6, yy + 2, GREY[2])
-
-    px, py = 132, ht + 126                                  # flagpole on the lawn
-    c.box(px - 9, py - 8, px + 9, py, STONE)
-    c.box(px - 3, py - 190, px + 3, py - 6, GREY)
-    c.blob(disc(px, py - 193, 4, 4), (BRASS, (214, 170, 80), (170, 128, 60)), px, py - 193, 4, 1)
-    for u in range(60):
-        dy = round(2.5 * math.sin(u / 8))
-        for v in range(39):
-            c.put(px + 4 + u, py - 186 + v + dy, CREAM[0] if 13 <= v < 26 else
-                  ACCENT[0] if u < 20 and v % 13 < 4 else ACCENT[1])
-        c.put(px + 4 + u, py - 187 + dy, OUTLINE)
-        c.put(px + 4 + u, py - 147 + dy, OUTLINE)
-    for v in range(-1, 40):
-        c.put(px + 64, py - 186 + v + round(2.5 * math.sin(7.5)), OUTLINE)
-
-
-def hall_shadow(c):
-    c.cast({p for p in block(30, 90, 708, 464) if p[0] >= 672 or p[1] >= 432})
-    c.cast(disc(140, 432 + 126, 14, 4))
 
 
 # ---------- square furniture ----------
@@ -601,9 +247,9 @@ def draw_town(sc):
     c = Canvas(W * TS, H * TS)
     draw_ground(c, sc['g'])
     draw_decor(c, sc['g'], random.Random(7))
-    for origin in sc['homes']:                              # every ground shadow first
-        house_shadow(c.at(*origin))
-    hall_shadow(c.at(*sc['hall']))
+    for i, origin in enumerate(sc['homes']):                # every ground shadow first
+        buildings.house_shadow(c.at(*origin), i)
+    buildings.hall_shadow(c.at(*sc['hall']))
     c.at(0, 0)
     c.cast(disc(FX + 24, FY + 18, 105, 80))
     for by, cx, _ in sc['trees']:
@@ -615,17 +261,16 @@ def draw_town(sc):
     c.apply_shadow()
     bare = c.im.copy()
 
-    for i, origin in enumerate(sc['homes']):
-        house(c.at(*origin), i)
-    hall(c.at(*sc['hall']))
-    c.at(0, 0)
-    fountain(c, FX, FY)
-    for x, y in sc['lamps']:
-        lamp(c, x, y)
-    for x, y in sc['benches']:
-        bench(c, x, y)
-    for i, (by, cx, pal) in enumerate(sc['trees']):
-        tree(c, cx, by, pal, i)
+    jobs = [(oy + 376, lambda i=i, o=(ox, oy): buildings.house(c.at(*o), i))
+            for i, (ox, oy) in enumerate(sc['homes'])]
+    jobs.append((sc['hall'][1] + 432, lambda: buildings.hall(c.at(*sc['hall']))))
+    jobs.append((FY + 60, lambda: fountain(c.at(0, 0), FX, FY)))
+    jobs += [(y, lambda x=x, y=y: lamp(c.at(0, 0), x, y)) for x, y in sc['lamps']]
+    jobs += [(y + 12, lambda x=x, y=y: bench(c.at(0, 0), x, y)) for x, y in sc['benches']]
+    jobs += [(by, lambda i=i, t=(cx, by, pal): tree(c.at(0, 0), *t, i))
+             for i, (by, cx, pal) in enumerate(sc['trees'])]
+    for _, draw in sorted(jobs, key=lambda job: job[0]):    # far things first, near things over them
+        draw()
     return c.im, bare
 
 
@@ -640,15 +285,21 @@ def town_data(sc):
             for cx in range(max(0, x0 // cell), min(W * 2, (x1 - 1) // cell + 1)):
                 solid[cy][cx] = True
 
-    for ox, oy in sc['homes']:
-        things.append((ox + 34, oy + 10, 412, 384, oy + 376))
-        mx, my = ox + 164, oy + 376 + 3 * TS - 16
-        things.append((mx - 12, my - 42, 28, 43, my))
-        block_px(mx - 8, my - 10, mx + 8, my)
+    def stand(x, y, w, h, depth):                           # a thing whose foot is centred on (x, y)
+        things.append((x - w // 2 - 2, y - h - 2, w + 4, h + 4, y))
+        block_px(x - w // 2 + 2, y - depth, x + w // 2 - 2, y)
+
+    for i, (ox, oy) in enumerate(sc['homes']):
+        things.append((ox + 34, oy - 80, 426, 474, oy + 376))
+        stand(ox + buildings.MAILBOX[0], oy + buildings.MAILBOX[1], 26, 42, 10)
+        for name, x, y in buildings.YARDS[i]:
+            w, h, depth, _ = buildings.PROPS[name]
+            stand(ox + x, oy + y, w, h, depth)
     hx, hy = sc['hall']
     things.append((hx - 14, hy - 2, 700, 448, hy + 432))
-    things.append((hx + 120, hy + 362, 80, 198, hy + 558))  # flagpole
-    block_px(hx + 124, hy + 548, hx + 140, hy + 558)
+    fx, fy = hx + buildings.HALL_FLAG[0], hy + buildings.HALL_FLAG[1]
+    things.append((fx - 12, fy - 212, 90, 214, fy))         # flagpole
+    block_px(fx - 8, fy - 10, fx + 8, fy)
     for bx in (hx + 204, hx + 468):                         # planters
         block_px(bx - 17, hy + 432, bx + 17, hy + 444)
     things.append((FX - 107, FY - 114, 214, 196, FY + 60))
