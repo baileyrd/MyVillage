@@ -265,7 +265,14 @@ def town_data(sc):
         w, h, depth, _ = props.PROPS[name]
         stand(x, y, w, h, depth)
     return dict(w=W * TS, h=H * TS, cell=cell, spawn=[FX, H * TS - 150],
-                solid=[''.join('1' if v else '0' for v in row) for row in solid], things=things, fx=effects(sc))
+                solid=[''.join('1' if v else '0' for v in row) for row in solid], things=things, fx=effects(sc),
+                doors=doors(sc))
+
+
+def doors(sc):
+    """[x, ground y, half width, room] for every doorway: walking up into one enters that room (see rooms/rooms.js)."""
+    found = [[ox + 240, oy + 376, 24, i] for i, (ox, oy) in enumerate(sc['homes'])]
+    return found + [[sc['hall'][0] + 336, sc['hall'][1] + 432, 40, len(found)]]
 
 
 def effects(sc):
@@ -371,7 +378,7 @@ def cut_out(im, backdrop):
     mask = ImageChops.difference(im, backdrop).convert('L').point(lambda v: 255 if v else 0)
     out = im.convert('RGBA')
     out.putalpha(mask)
-    return out
+    return Image.composite(out, Image.new('RGBA', im.size, (0, 0, 0, 0)), mask)   # no hidden colour: smaller file
 
 
 def main(out_dir):
