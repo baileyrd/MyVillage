@@ -18,6 +18,7 @@
 <div id="hint">Walk with the arrow keys or WASD, hold Shift to run. Walk into a doorway to go inside. Drag yourself with the mouse to drop in anywhere. Zoom with the mouse wheel or + and &minus;, 0 shows everything, M turns the sound off.</div>
 <script src="maps/town-1950s.js"></script>
 <script src="rooms/rooms.js"></script>
+<script src="characters/cast.js"></script>
 <script>
 'use strict';
 // A place is somewhere the walker can be: the town, or the room inside a house. Each has a
@@ -42,13 +43,15 @@ const STRIDE = [1, 0, 2, 0];          // step, stand, other step, stand
 const MAX_ZOOM = 4;
 const DOORSTEP = 40;                  // how near a door's ground line counts as walking into it
 const LIFT = 14;                      // how high the walker hangs while held by the mouse
+const STROLL = 60;                    // a director's walking pace
+const YARD = [170, 16, 136];          // a yard, from its front door: half its width, where it starts and ends below the door
 const MOVES = {
   ArrowUp: [0, -1], w: [0, -1], ArrowDown: [0, 1], s: [0, 1],
   ArrowLeft: [-1, 0], a: [-1, 0], ArrowRight: [1, 0], d: [1, 0],
 };
 
-const me = { x: TOWN.spawn[0], y: TOWN.spawn[1], facing: 'up', walked: 0, moving: false };
-const aide = { x: me.x - 34, y: me.y, facing: 'up', walked: 0, moving: false };
+const me = { sheet: WALKER, x: TOWN.spawn[0], y: TOWN.spawn[1], facing: 'up', walked: 0, moving: false };
+const aide = { sheet: AIDE, x: me.x - 34, y: me.y, facing: 'up', walked: 0, moving: false };
 let trail = [];                       // where Nano has walked and Cedric has not yet, oldest first
 let ahead = 0;                        // how long that stretch of path is
 const keys = new Set();
@@ -72,14 +75,14 @@ function loadImage(src) {
   });
 }
 
-function solid(x, y) {
-  if (x < 0 || y < 0 || x >= place.w || y >= place.h) return true;
-  return place.solid[Math.floor(y / place.cell)][Math.floor(x / place.cell)] === '1';
+function solid(x, y, where = place) {
+  if (x < 0 || y < 0 || x >= where.w || y >= where.h) return true;
+  return where.solid[Math.floor(y / where.cell)][Math.floor(x / where.cell)] === '1';
 }
 
-function blocked(x, y) {
+function blocked(x, y, where = place) {                      // would feet standing at (x, y) be on something solid
   const left = x - FOOT_W / 2, right = x + FOOT_W / 2 - 1, top = y - FOOT_H, bottom = y - 1;
-  return solid(left, top) || solid(right, top) || solid(left, bottom) || solid(right, bottom);
+  return solid(left, top, where) || solid(right, top, where) || solid(left, bottom, where) || solid(right, bottom, where);
 }
 
 // ---------- going in and out ----------
@@ -154,6 +157,67 @@ function follow(dt) {
     step -= go;
   }
 }
+
+// ---------- the directors ----------
+// Each director keeps to their own yard and their own house. They stroll to a spot they can reach
+// in a straight line, stand a while, and now and then go through their front door to the other.
+const directors = CAST.map((role) => ({
+  ...role, where: TOWN, x: 0, y: 0, facing: 'down', walked: 0, moving: false,
+  goal: null, leaving: false, rest: Math.random() * 4, stay: 20 + Math.random() * 90,
+}));
+
+function clearWay(where, x0, y0, x1, y1) {
+  const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0));    // every pixel of the way
+  for (let i = 1; i <= steps; i++) {
+    if (blocked(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps, where)) return false;
+  }
+  return true;
+}
+
+function doorway(who, where) {                               // where a director stands as they come through their door
+  if (where !== TOWN) return where.enter;
+  const [x, ground] = TOWN.doors[who.house];
+  return [x, ground + YARD[1]];
+}
+
+function somewhere(who) {                                    // a spot in the yard, or anywhere in the room
+  const { where } = who, [x, ground] = TOWN.doors[who.house], any = Math.random;
+  return where === TOWN
+    ? [x + (any() * 2 - 1) * YARD[0], ground + YARD[1] + any() * (YARD[2] - YARD[1])]
+    : [any() * where.w, any() * where.h];
+}
+
+function throughDoor(who) {
+  who.where = who.where === TOWN ? ROOMS[TOWN.doors[who.house][3]] : TOWN;
+  [who.x, who.y] = doorway(who, who.where);
+  Object.assign(who, { facing: who.where === TOWN ? 'down' : 'up', leaving: false, stay: 40 + Math.random() * 80 });
+}
+
+function direct(who, dt) {
+  who.stay -= dt;
+  if (!who.goal) {
+    who.moving = false;
+    who.rest -= dt;
+    if (who.rest > 0) return;
+    const door = doorway(who, who.where), spot = somewhere(who);
+    if (who.stay <= 0 && clearWay(who.where, who.x, who.y, ...door)) Object.assign(who, { goal: door, leaving: true });
+    else if (!blocked(...spot, who.where) && clearWay(who.where, who.x, who.y, ...spot)) who.goal = spot;
+    return;                                                  // nowhere to go this time: look again next frame
+  }
+  const dx = who.goal[0] - who.x, dy = who.goal[1] - who.y, far = Math.hypot(dx, dy), step = Math.min(far, STROLL * dt);
+  const x = who.x + dx / far * step, y = who.y + dy / far * step;
+  if (far > 0.5 && !blocked(x, y, who.where)) {
+    who.facing = Math.abs(dy) >= Math.abs(dx) ? (dy < 0 ? 'up' : 'down') : (dx < 0 ? 'left' : 'right');
+    Object.assign(who, { x, y, walked: who.walked + step, moving: true });
+    return;
+  }
+  const arrived = far <= 0.5;                                // otherwise a corner was in the way: stop here
+  Object.assign(who, { goal: null, rest: 1 + Math.random() * 6 });
+  if (who.leaving && arrived) throughDoor(who);
+  who.leaving = false;
+}
+
+directors.forEach((who) => { [who.x, who.y] = doorway(who, TOWN); });
 
 // ---------- grabbing with the mouse ----------
 function toPlace(clientX, clientY) {                         // a spot on the screen, in place pixels
@@ -285,21 +349,21 @@ function moveCamera(dt, viewW, viewH) {
   cam = [along(look[0], viewW, place.w), along(look[1], viewH, place.h)];
 }
 
-function drawPerson(who, sheet, lift) {
+function drawPerson(who, lift) {
   const left = Math.round(who.x - FRAME_W / 2), top = Math.round(who.y - FRAME_H + 2);
   ctx.fillStyle = 'rgba(60, 38, 48, 0.32)';
   ctx.beginPath();
   ctx.ellipse(who.x + 3, who.y - 1, lift ? 11 : 15, lift ? 4 : 5, 0, 0, Math.PI * 2);
   ctx.fill();
   const frame = who.moving ? STRIDE[Math.floor(who.walked / 16) % STRIDE.length] : 0;
-  ctx.drawImage(pics[sheet], frame * FRAME_W, ROW[who.facing] * FRAME_H, FRAME_W, FRAME_H,
+  ctx.drawImage(pics[who.sheet], frame * FRAME_W, ROW[who.facing] * FRAME_H, FRAME_W, FRAME_H,
     left, top - lift, FRAME_W, FRAME_H);
   return [left, top];
 }
 
 // A person on the ground: anything standing nearer the camera than they are is redrawn over them.
-function drawStanding(who, sheet) {
-  const [left, top] = drawPerson(who, sheet, 0);
+function drawStanding(who) {
+  const [left, top] = drawPerson(who, 0);
   for (const [x, y, w, h, ground] of place.things) {
     if (ground <= who.y) continue;
     const x0 = Math.max(x, left), y0 = Math.max(y, top);
@@ -328,11 +392,11 @@ function draw(dt) {
   if (outside) drawEffects(false, camX, camY, viewW, viewH);
   else place.fires.forEach(([x, y]) => fire(x, y));
 
-  const people = held ? [[aide, AIDE]] : [[aide, AIDE], [me, WALKER]];
-  people.sort((a, b) => a[0].y - b[0].y);                    // the one farther away first
-  for (const [who, sheet] of people) drawStanding(who, sheet);
+  const people = [...directors.filter((who) => who.where === place), aide, ...(held ? [] : [me])];
+  people.sort((a, b) => a.y - b.y);                          // the ones farther away first
+  people.forEach(drawStanding);
   if (outside) drawEffects(true, camX, camY, viewW, viewH);
-  if (held) drawPerson(me, WALKER, LIFT);                                // in the air, in front of everything
+  if (held) drawPerson(me, LIFT);                            // in the air, in front of everything
   if (fade > 0) {                                            // a blink of dark when going through a door
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = 'rgba(58, 36, 28, ' + fade.toFixed(3) + ')';
@@ -547,6 +611,7 @@ function tick(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (!held) { walk(dt); follow(dt); }
+  directors.forEach((who) => direct(who, dt));
   draw(dt);
   requestAnimationFrame(tick);
 }
@@ -571,7 +636,7 @@ addEventListener('wheel', (event) => {
 }, { passive: false });
 addEventListener('resize', resize);
 
-Promise.all([WALKER, AIDE, TOWN.art, TOWN.objects, ...ROOMS.flatMap((room) => [room.art, room.objects])].map(loadImage))
+Promise.all([WALKER, AIDE, ...CAST.map((role) => role.sheet), TOWN.art, TOWN.objects, ...ROOMS.flatMap((room) => [room.art, room.objects])].map(loadImage))
   .then(() => {
     resize();
     rejoin();
