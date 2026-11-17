@@ -34,6 +34,9 @@ const SPEED = 230, RUN = 1.8;         // map pixels per second, and how much fas
 const FOOT_W = 22, FOOT_H = 12;       // the part of the walker that bumps into things
 const FRAME_W = 48, FRAME_H = 64;     // one drawing in the walker's sheet: the same size whichever way they face
 const WALKER = 'characters/nano.png';  // Nano, the Chief Human Officer
+const AIDE = 'characters/cedric.png';  // Cedric, the chief of staff, who follows Nano everywhere
+const CRUMB = 4;                      // spacing of the points Nano's path is remembered by
+const FOLLOW = 44;                    // how far behind Nano, along that path, Cedric walks
 const ROW = { down: 0, right: 1, left: 2, up: 3 };   // sheet rows: toward us, right, left, away
 const STRIDE = [1, 0, 2, 0];          // step, stand, other step, stand
 const MAX_ZOOM = 4;
@@ -45,6 +48,9 @@ const MOVES = {
 };
 
 const me = { x: TOWN.spawn[0], y: TOWN.spawn[1], facing: 'up', walked: 0, moving: false };
+const aide = { x: me.x - 34, y: me.y, facing: 'up', walked: 0, moving: false };
+let trail = [];                       // where Nano has walked and Cedric has not yet, oldest first
+let ahead = 0;                        // how long that stretch of path is
 const keys = new Set();
 const pics = {};                      // every picture, by file name
 let place = TOWN;                     // where the walker is now
@@ -84,6 +90,7 @@ function moveTo(next, x, y, facing) {
   glide = false;
   fade = 1;
   setZoom(zoom);
+  rejoin();
 }
 
 function throughDoors(dy) {
@@ -117,6 +124,35 @@ function walk(dt) {
   if (!blocked(me.x, me.y + dy * step)) me.y += dy * step;
   me.walked += Math.hypot(me.x - fromX, me.y - fromY);
   throughDoors(dy);
+}
+
+// ---------- the chief of staff ----------
+// Cedric walks along the path Nano walked, a few steps behind, so they never need to find a way
+// round anything. After a doorway or a drop there is no path to follow, so they step to Nano's side.
+function rejoin() {
+  [aide.x, aide.y] = nearestFree(me.x - 34, me.y);
+  Object.assign(aide, { facing: me.facing, moving: false });
+  trail = [];
+  ahead = 0;
+}
+
+function follow(dt) {
+  const last = trail[trail.length - 1] || [aide.x, aide.y];
+  const gap = Math.hypot(me.x - last[0], me.y - last[1]);
+  if (gap >= CRUMB) { trail.push([me.x, me.y]); ahead += gap; }
+  aide.moving = ahead > FOLLOW;
+  if (!aide.moving) return;
+  let step = Math.min(ahead - FOLLOW, SPEED * Math.min(RUN * 1.2, Math.max(1, ahead / (FOLLOW * 1.5))) * dt);   // hurry when left behind
+  aide.walked += step;
+  ahead -= step;
+  while (step > 0 && trail.length) {
+    const dx = trail[0][0] - aide.x, dy = trail[0][1] - aide.y, far = Math.hypot(dx, dy);
+    if (far > 0.5) aide.facing = Math.abs(dy) >= Math.abs(dx) ? (dy < 0 ? 'up' : 'down') : (dx < 0 ? 'left' : 'right');
+    const go = Math.min(step, far);
+    if (far > 0) { aide.x += dx / far * go; aide.y += dy / far * go; }
+    if (go === far) trail.shift();
+    step -= go;
+  }
 }
 
 // ---------- grabbing with the mouse ----------
@@ -170,6 +206,7 @@ function drop() {
   held = null;
   [me.x, me.y] = nearestFree(me.x, me.y);                    // dropped on a roof or a table: set down beside it
   me.facing = 'down';
+  rejoin();
   glide = true;
   canvas.style.cursor = 'default';
 }
@@ -248,16 +285,28 @@ function moveCamera(dt, viewW, viewH) {
   cam = [along(look[0], viewW, place.w), along(look[1], viewH, place.h)];
 }
 
-function drawWalker(lift) {
-  const left = Math.round(me.x - FRAME_W / 2), top = Math.round(me.y - FRAME_H + 2);
+function drawPerson(who, sheet, lift) {
+  const left = Math.round(who.x - FRAME_W / 2), top = Math.round(who.y - FRAME_H + 2);
   ctx.fillStyle = 'rgba(60, 38, 48, 0.32)';
   ctx.beginPath();
-  ctx.ellipse(me.x + 3, me.y - 1, lift ? 11 : 15, lift ? 4 : 5, 0, 0, Math.PI * 2);
+  ctx.ellipse(who.x + 3, who.y - 1, lift ? 11 : 15, lift ? 4 : 5, 0, 0, Math.PI * 2);
   ctx.fill();
-  const frame = me.moving ? STRIDE[Math.floor(me.walked / 16) % STRIDE.length] : 0;
-  ctx.drawImage(pics[WALKER], frame * FRAME_W, ROW[me.facing] * FRAME_H, FRAME_W, FRAME_H,
+  const frame = who.moving ? STRIDE[Math.floor(who.walked / 16) % STRIDE.length] : 0;
+  ctx.drawImage(pics[sheet], frame * FRAME_W, ROW[who.facing] * FRAME_H, FRAME_W, FRAME_H,
     left, top - lift, FRAME_W, FRAME_H);
   return [left, top];
+}
+
+// A person on the ground: anything standing nearer the camera than they are is redrawn over them.
+function drawStanding(who, sheet) {
+  const [left, top] = drawPerson(who, sheet, 0);
+  for (const [x, y, w, h, ground] of place.things) {
+    if (ground <= who.y) continue;
+    const x0 = Math.max(x, left), y0 = Math.max(y, top);
+    const x1 = Math.min(x + w, left + FRAME_W), y1 = Math.min(y + h, top + FRAME_H);
+    if (x1 > x0 && y1 > y0) ctx.drawImage(pics[place.objects], x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+  }
+  drawHouses(left, top, left + FRAME_W, top + FRAME_H, who.y);
 }
 
 function draw(dt) {
@@ -279,19 +328,11 @@ function draw(dt) {
   if (outside) drawEffects(false, camX, camY, viewW, viewH);
   else place.fires.forEach(([x, y]) => fire(x, y));
 
-  if (!held) {
-    const [left, top] = drawWalker(0);
-    // Anything standing nearer the camera than the walker is redrawn over them.
-    for (const [x, y, w, h, ground] of place.things) {
-      if (ground <= me.y) continue;
-      const x0 = Math.max(x, left), y0 = Math.max(y, top);
-      const x1 = Math.min(x + w, left + FRAME_W), y1 = Math.min(y + h, top + FRAME_H);
-      if (x1 > x0 && y1 > y0) ctx.drawImage(pics[place.objects], x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
-    }
-    drawHouses(left, top, left + FRAME_W, top + FRAME_H, me.y);
-  }
+  const people = held ? [[aide, AIDE]] : [[aide, AIDE], [me, WALKER]];
+  people.sort((a, b) => a[0].y - b[0].y);                    // the one farther away first
+  for (const [who, sheet] of people) drawStanding(who, sheet);
   if (outside) drawEffects(true, camX, camY, viewW, viewH);
-  if (held) drawWalker(LIFT);                                // in the air, in front of everything
+  if (held) drawPerson(me, WALKER, LIFT);                                // in the air, in front of everything
   if (fade > 0) {                                            // a blink of dark when going through a door
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = 'rgba(58, 36, 28, ' + fade.toFixed(3) + ')';
@@ -505,7 +546,7 @@ let last = 0;
 function tick(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  if (!held) walk(dt);
+  if (!held) { walk(dt); follow(dt); }
   draw(dt);
   requestAnimationFrame(tick);
 }
@@ -530,9 +571,10 @@ addEventListener('wheel', (event) => {
 }, { passive: false });
 addEventListener('resize', resize);
 
-Promise.all([WALKER, TOWN.art, TOWN.objects, ...ROOMS.flatMap((room) => [room.art, room.objects])].map(loadImage))
+Promise.all([WALKER, AIDE, TOWN.art, TOWN.objects, ...ROOMS.flatMap((room) => [room.art, room.objects])].map(loadImage))
   .then(() => {
     resize();
+    rejoin();
     requestAnimationFrame(tick);
   })
   .catch((error) => { hint.textContent = error.message; hint.style.opacity = 1; });
