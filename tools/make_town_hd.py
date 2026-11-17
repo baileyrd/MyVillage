@@ -21,9 +21,11 @@ from PIL import Image, ImageChops
 
 import buildings
 import make_maps as mm
+import props
 from kit import (FX, FY, GLOW, GRASS, GREY, PATH, PAVER, PX0, PX1, PY0, PY1, S, SQUARE, STONE, TH, TS,
                  YARD, Canvas, fleck)
 from make_maps import OUTLINE, WOOD, H, W, darker, disc, mix, noise
+from props import bench, fountain, lamp
 
 # ---------- ground ----------
 
@@ -130,66 +132,7 @@ def draw_decor(c, g, rng):
             c.ball(x, y, rng.randrange(3, 6), rng.randrange(2, 4), STONE)
 
 
-# ---------- square furniture ----------
-
-def fountain(c, cx, cy):
-    water = mm.WATER
-    outer, inner = disc(cx, cy, 105, 80), disc(cx, cy - 3, 84, 62)
-    c.blob(outer, STONE, cx, cy, 100, 10)
-    for x, y in outer - inner:                              # rim blocks
-        a = math.atan2((y - cy) * 1.3, x - cx) * 14 / math.pi
-        if abs(a - round(a)) < .07:
-            c.put(x, y, STONE[2])
-    for x, y in inner:
-        rr = math.hypot((x - cx) / 84, (y - cy + 3) / 62)
-        col = water[1]
-        if rr > .84 and (x - cx) + (y - cy) < 0:
-            col = water[2]                                  # rim shades the near water
-        elif int(rr * 9 + noise(x // 7, y // 7, 3) * .9) % 3 == 0 and noise(x, y // 2, 4) < .4:
-            col = water[0]
-        if noise(x, y, 5) > .988:
-            col = (246, 252, 248)
-        c.put(x, y, col)
-    for x, y in inner:
-        for q in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-            if q not in inner:
-                c.put(*q, OUTLINE)
-    c.blob(disc(cx, cy + 2, 22, 8), STONE, cx, cy + 2, 20, 14)
-    c.box(cx - 10, cy - 60, cx + 10, cy - 4, STONE)
-    c.blob(disc(cx, cy - 62, 40, 15), STONE, cx, cy - 62, 38, 12)
-    c.blob(disc(cx, cy - 66, 30, 8), water, cx, cy - 66, 26, 13)
-    c.box(cx - 5, cy - 86, cx + 5, cy - 66, STONE)
-    spray = (246, 252, 248)
-    for k in range(26):                                     # jet
-        c.rect(cx - 1 - (k > 18), cy - 112 + k, cx + 1 + (k > 18), cy - 111 + k, spray if k % 4 else water[0])
-    for sx in (-36, -22, -8, 8, 22, 36):                    # falling streams
-        drop = 12 - abs(sx) // 4
-        for y in range(cy - 58 + abs(sx) // 6, cy - 6 + drop):
-            c.rect(cx + sx - 1, y, cx + sx + 1, y + 1, spray if (y + sx) % 5 < 3 else water[0])
-        c.rect(cx + sx - 4, cy - 6 + drop, cx + sx + 4, cy - 5 + drop, spray)
-
-
-def lamp(c, x, y):
-    c.box(x - 9, y - 8, x + 9, y, GREY)
-    c.box(x - 3, y - 86, x + 3, y - 6, GREY)
-    c.box(x - 6, y - 60, x + 6, y - 55, GREY)
-    c.box(x - 13, y - 116, x + 13, y - 84, GLOW)
-    c.rect(x - 7, y - 110, x + 5, y - 90, (255, 252, 226))
-    c.rect(x - 1, y - 116, x + 1, y - 84, GREY[1])
-    c.box(x - 16, y - 122, x + 16, y - 114, GREY)
-    c.box(x - 3, y - 129, x + 3, y - 121, GREY)
-
-
-def bench(c, x, y):
-    for lx in (x - 38, x + 32):
-        c.box(lx, y - 8, lx + 6, y + 14, GREY)
-    for i in range(3):
-        c.box(x - 42, y - 30 + i * 8, x + 42, y - 23 + i * 8, WOOD)
-    for i in range(2):
-        c.box(x - 42, y - 5 + i * 7, x + 42, y + 3 + i * 7, (WOOD[0], WOOD[0], WOOD[1]))
-    for lx in (x - 45, x + 39):
-        c.box(lx, y - 14, lx + 6, y - 9, GREY)
-
+# ---------- trees (benches, lamps, the fountain and the small props are in props.py) ----------
 
 def tree(c, cx, by, pal, seed):
     """A trunk and five smooth lobes of leaves, each with a bold outline and a glint."""
@@ -207,6 +150,25 @@ def tree(c, cx, by, pal, seed):
         c.ball(cx + dx, by + dy, rx, ry, pal)
 
 
+# Small props around the town as (name, x, y), the middle of each one's foot. None may sit
+# on a path or in front of a door: check_doors.py fails the build if one does.
+PLACED = [
+    ('flower_bush', 2444, 584), ('bush', 2946, 584), ('bush', 3020, 584), ('flower_bush', 236, 1352),
+    ('bush', 3116, 1352), ('flower_bush', 3618, 1352), ('bush', 738, 2120), ('bush', 3116, 2120),
+    ('bush', 1410, 2408), ('flower_bush', 2946, 2408), ('barrel', 2412, 2354), ('crate', 800, 2128),
+    ('crate', 2988, 530), ('barrel', 204, 1298), ('vending', 2330, 1262), ('vending', 1510, 1262),
+    ('flower_bed', 1620, 1142), ('flower_bed', 2110, 1142), ('flower_bed', 2220, 1142), ('flower_bed', 1560, 1960),
+    ('flower_bed', 1700, 1960), ('flower_bed', 2140, 1960), ('flower_bed', 2280, 1960), ('flower_bed', 2420, 1960),
+    ('flower_bed', 1650, 1062), ('flower_bed', 2190, 1062), ('bush', 1306, 1250), ('bush', 2534, 1250),
+    ('bush', 1306, 1700), ('bush', 1306, 1880), ('bench', 1000, 862), ('bench', 2840, 862),
+    ('bench', 3040, 1470), ('bench', 1600, 1262), ('bench', 2240, 1262), ('bench', 1700, 1880),
+    ('bench', 2140, 1880), ('bench', 3240, 2500), ('lamp', 864, 712), ('lamp', 1414, 860),
+    ('lamp', 2426, 860), ('lamp', 1840, 2300), ('lamp', 2000, 2300), ('lamp', 2140, 2528),
+    ('lamp', 1840, 2700), ('lamp', 3140, 1640), ('fence', 760, 2528), ('fence', 1300, 2528),
+    ('fence', 1700, 2528), ('fence', 2260, 2528), ('fence', 2980, 2528),
+]
+
+
 def scene():
     """Where every standing thing is, in map pixels."""
     g = mm.layout()
@@ -218,7 +180,8 @@ def scene():
         lamps=[(PX0 + 72, PY0 + 120), (PX1 - 72, PY0 + 120), (PX0 + 72, PY1 - 36), (PX1 - 72, PY1 - 36)],
         benches=[(FX - 228, FY + 12), (FX + 228, FY + 12)],
         homes=[(tx * TS - 48, ty * TS - 40) for tx, ty in mm.HOUSES],
-        hall=(mm.HALL[0] * TS, mm.HALL[1] * TS))
+        hall=(mm.HALL[0] * TS, mm.HALL[1] * TS),
+        props=PLACED)
 
 
 def draw_town(sc):
@@ -237,6 +200,8 @@ def draw_town(sc):
         c.cast(disc(x + 10, y, 16, 5))
     for x, y in sc['benches']:
         c.cast(disc(x + 8, y + 14, 46, 6))
+    for name, x, y in sc['props']:
+        c.cast(disc(x + 6, y, props.PROPS[name][0] // 2, 4))
     c.apply_shadow()
     bare = c.im.copy()
 
@@ -248,6 +213,7 @@ def draw_town(sc):
     jobs += [(y + 12, lambda x=x, y=y: bench(c.at(0, 0), x, y)) for x, y in sc['benches']]
     jobs += [(by, lambda i=i, t=(cx, by, pal): tree(c.at(0, 0), *t, i))
              for i, (by, cx, pal) in enumerate(sc['trees'])]
+    jobs += [(y, lambda n=name, x=x, y=y: props.PROPS[n][3](c.at(0, 0), x, y)) for name, x, y in sc['props']]
     for _, draw in sorted(jobs, key=lambda job: job[0]):    # far things first, near things over them
         draw()
     return c.im, bare
@@ -295,6 +261,9 @@ def town_data(sc):
     for by, cx, _ in sc['trees']:
         things.append((cx - 62, by - 128, 124, 130, by))
         block_px(cx - 14, by - 22, cx + 14, by + 2)
+    for name, x, y in sc['props']:
+        w, h, depth, _ = props.PROPS[name]
+        stand(x, y, w, h, depth)
     return dict(w=W * TS, h=H * TS, cell=cell, spawn=[FX, H * TS - 150],
                 solid=[''.join('1' if v else '0' for v in row) for row in solid], things=things)
 
