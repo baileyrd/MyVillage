@@ -55,6 +55,7 @@ let cam = [0, 0];                     // top-left corner of the view, in place p
 let glide = false;                    // the camera is easing back to the walker after a drop
 let fade = 0;                         // 1 just after going through a door, falling to 0
 let zoom = 1;
+let grid = 1;                         // canvas pixels per place pixel: a whole number when zoomed in
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -185,9 +186,48 @@ function setZoom(z) {
 }
 
 function resize() {
-  canvas.width = Math.round(innerWidth * devicePixelRatio);
-  canvas.height = Math.round(innerHeight * devicePixelRatio);
   setZoom(zoom);
+}
+
+// Zoomed in, the canvas is drawn with every art pixel a whole number of canvas pixels and the
+// browser shrinks it smoothly to fit the window. Stretching art by an uneven amount (1.25 or
+// 2.4 times) straight onto the screen makes some pixels wider than their neighbours: grain.
+function fitCanvas() {
+  const scale = zoom * devicePixelRatio, whole = Math.ceil(scale - 0.02);
+  const tooBig = innerWidth * innerHeight * (devicePixelRatio * whole / scale) ** 2 > 16e6;
+  grid = scale <= 1 || tooBig ? scale : whole;
+  const w = Math.round(innerWidth * devicePixelRatio * grid / scale);
+  const h = Math.round(innerHeight * devicePixelRatio * grid / scale);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+
+// ---------- crisp houses ----------
+// Zoomed in, each house is laid over the map from its own picture, four times the detail of
+// the map (TOWN.houses, written by tools/make_town_hd.py). A picture holds only the pixels of
+// its house that show on the map, so nothing can look different where the two meet.
+const HOUSE_DETAIL = 4, HOUSES_KEPT = 4;
+const housePics = new Map();          // file -> picture, the most recently used last
+
+function housePic(file) {
+  let img = housePics.get(file);
+  housePics.delete(file);
+  if (!img) { img = new Image(); img.src = 'maps/' + file; }
+  housePics.set(file, img);
+  if (housePics.size > HOUSES_KEPT) housePics.delete(housePics.keys().next().value);   // let go of the stalest
+  return img.complete && img.naturalWidth ? img : null;
+}
+
+// Draw the part of every house that lies in the box (x0, y0)-(x1, y1) and stands nearer than `behind`.
+function drawHouses(x0, y0, x1, y1, behind) {
+  if (place !== TOWN || grid <= 1) return;
+  ctx.imageSmoothingEnabled = true;
+  for (const [x, y, w, h, ground, file] of TOWN.houses) {
+    const ax = Math.max(x, x0), ay = Math.max(y, y0), bx = Math.min(x + w, x1), by = Math.min(y + h, y1);
+    if (ground <= behind || bx <= ax || by <= ay) continue;
+    const img = housePic(file), k = HOUSE_DETAIL;
+    if (img) ctx.drawImage(img, (ax - x) * k, (ay - y) * k, (bx - ax) * k, (by - ay) * k, ax, ay, bx - ax, by - ay);
+  }
+  ctx.imageSmoothingEnabled = grid < 1;
 }
 
 // The camera follows the walker, stops at the edges of the place, and centres the place when
@@ -221,7 +261,8 @@ function drawWalker(lift) {
 }
 
 function draw(dt) {
-  const scale = zoom * devicePixelRatio;
+  fitCanvas();
+  const scale = grid;
   const viewW = canvas.width / scale, viewH = canvas.height / scale;
   if (held) carry(dt, viewW, viewH);
   moveCamera(dt, viewW, viewH);
@@ -233,6 +274,7 @@ function draw(dt) {
   ctx.imageSmoothingEnabled = scale < 1;   // crisp pixels zoomed in, clean shrink zoomed out
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(pics[place.art], 0, 0);
+  drawHouses(camX, camY, camX + viewW, camY + viewH, -Infinity);
   const outside = place === TOWN;
   if (outside) drawEffects(false, camX, camY, viewW, viewH);
   else place.fires.forEach(([x, y]) => fire(x, y));
@@ -246,6 +288,7 @@ function draw(dt) {
       const x1 = Math.min(x + w, left + FRAME_W), y1 = Math.min(y + h, top + FRAME_H);
       if (x1 > x0 && y1 > y0) ctx.drawImage(pics[place.objects], x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
     }
+    drawHouses(left, top, left + FRAME_W, top + FRAME_H, me.y);
   }
   if (outside) drawEffects(true, camX, camY, viewW, viewH);
   if (held) drawWalker(LIFT);                                // in the air, in front of everything

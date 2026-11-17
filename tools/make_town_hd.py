@@ -2,13 +2,15 @@
 """Draw the 1950s town at three times the detail (48-pixel tiles, 3840 x 2880).
 
 Usage: python make_town_hd.py OUT_DIR
-Needs Pillow, with make_maps.py, kit.py and buildings.py beside it. The layout
+Needs Pillow and numpy, with make_maps.py, kit.py, buildings.py, props.py and smooth.py beside it. The layout
 (houses, hall, square, paths, yards, tree positions) comes from make_maps.py
 unchanged. Writes into OUT_DIR:
   town-1950s-hd.png       the finished map
   town-1950s-objects.png  only the things that stand up (see-through elsewhere),
                           so the page can draw them in front of a walker
   town-1950s.js           where the walker cannot go, and where those things are
+  houses/NAME.png         each house and the town hall on its own, four times the detail with
+                          smooth corners, for the page to lay over the map when zoomed in
   visitor.png             the walker: rows down, up, left, right; three steps each
 """
 import json
@@ -26,6 +28,7 @@ from kit import (FX, FY, GLOW, GRASS, GREY, PATH, PAVER, PX0, PX1, PY0, PY1, S, 
                  YARD, Canvas, fleck)
 from make_maps import OUTLINE, WOOD, H, W, darker, disc, mix, noise
 from props import bench, fountain, lamp
+from smooth import K, smooth4x
 
 # ---------- ground ----------
 
@@ -185,7 +188,9 @@ def scene():
 
 
 def draw_town(sc):
-    """Return (finished map, the same map before anything was stood on it)."""
+    """Return (finished map, the same map before anything was stood on it, the buildings).
+    The buildings are (name, x, y, ground line, picture): each house with its yard, and the town hall,
+    cut out of the finished map, so a picture holds exactly the pixels of it that can be seen."""
     c = Canvas(W * TS, H * TS)
     draw_ground(c, sc['g'])
     draw_decor(c, sc['g'], random.Random(7))
@@ -205,21 +210,38 @@ def draw_town(sc):
     c.apply_shadow()
     bare = c.im.copy()
 
-    jobs = [(oy + 376, lambda i=i, o=(ox, oy): buildings.house(c.at(*o), i))
+    jobs = [(oy + 376, lambda i=i, o=(ox, oy): buildings.house(c.at(*o), i), f'house-{i:02d}')
             for i, (ox, oy) in enumerate(sc['homes'])]
-    jobs.append((sc['hall'][1] + 432, lambda: buildings.hall(c.at(*sc['hall']))))
+    jobs.append((sc['hall'][1] + 432, lambda: buildings.hall(c.at(*sc['hall'])), 'town-hall'))
     jobs.append((FY + 60, lambda: fountain(c.at(0, 0), FX, FY)))
     jobs += [(y, lambda x=x, y=y: lamp(c.at(0, 0), x, y)) for x, y in sc['lamps']]
     jobs += [(y + 12, lambda x=x, y=y: bench(c.at(0, 0), x, y)) for x, y in sc['benches']]
     jobs += [(by, lambda i=i, t=(cx, by, pal): tree(c.at(0, 0), *t, i))
              for i, (by, cx, pal) in enumerate(sc['trees'])]
     jobs += [(y, lambda n=name, x=x, y=y: props.PROPS[n][3](c.at(0, 0), x, y)) for name, x, y in sc['props']]
-    for _, draw in sorted(jobs, key=lambda job: job[0]):    # far things first, near things over them
+    drawn = []                                              # name, box, ground, the map just after it was drawn
+    for ground, draw, *name in sorted(jobs, key=lambda job: job[0]):    # far things first, near things over them
+        before = c.im.copy() if name else None
         draw()
-    return c.im, bare
+        if name:
+            box = ImageChops.difference(c.im, before).getbbox()
+            drawn.append((name[0], box, ground, before.crop(box), c.im.crop(box)))
+    pieces = []
+    for name, box, ground, before, after in drawn:
+        seen = same(after, c.im.crop(box))                  # not hidden by a tree or prop drawn later
+        mine = ImageChops.invert(same(after, before))       # changed by this building
+        piece = after.convert('RGBA')
+        piece.putalpha(ImageChops.multiply(seen, mine))
+        pieces.append((name, box[0], box[1], ground, piece))
+    return c.im, bare, pieces
 
 
-def town_data(sc):
+def same(a, b):
+    """White where two pictures hold the same pixel, black elsewhere."""
+    return ImageChops.difference(a, b).convert('L').point(lambda v: 0 if v else 255)
+
+
+def town_data(sc, pieces=()):
     """Blocked half-tiles, and a box plus ground line for each standing thing."""
     cell = TS // 2
     solid = [[sc['g'][y // 2][x // 2] == 'B' for x in range(W * 2)] for y in range(H * 2)]
@@ -266,7 +288,8 @@ def town_data(sc):
         stand(x, y, w, h, depth)
     return dict(w=W * TS, h=H * TS, cell=cell, spawn=[FX, H * TS - 150],
                 solid=[''.join('1' if v else '0' for v in row) for row in solid], things=things, fx=effects(sc),
-                doors=doors(sc))
+                doors=doors(sc), houses=[[x, y, im.width, im.height, ground, f'houses/{name}.png']
+                                         for name, x, y, ground, im in pieces])
 
 
 def doors(sc):
@@ -385,11 +408,14 @@ def main(out_dir):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     sc = scene()
-    town, bare = draw_town(sc)
+    town, bare, pieces = draw_town(sc)
     town.save(out / 'town-1950s-hd.png', optimize=True)
     cut_out(town, bare).save(out / 'town-1950s-objects.png', optimize=True)
-    (out / 'town-1950s.js').write_text('window.TOWN = ' + json.dumps(town_data(sc), separators=(',', ':')) + ';\n')
+    (out / 'town-1950s.js').write_text('window.TOWN = ' + json.dumps(town_data(sc, pieces), separators=(',', ':')) + ';\n')
     visitor_sheet().save(out / 'visitor.png')
+    (out / 'houses').mkdir(exist_ok=True)
+    for name, _, _, _, im in pieces:
+        smooth4x(im).save(out / 'houses' / f'{name}.png', optimize=True)
 
 
 if __name__ == '__main__':
