@@ -5,33 +5,40 @@
 <title>My AI Village</title>
 <style>
   html, body { margin: 0; height: 100%; background: #3a241c; overflow: hidden; }
-  canvas { display: block; width: 100vw; height: 100vh; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
   #hint {
-    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
-    font: 14px system-ui, sans-serif; color: #fff6de; background: #3a241ccc;
-    padding: 6px 12px; border-radius: 6px; transition: opacity 1s; white-space: nowrap;
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 92vw;
+    font: 14px system-ui, sans-serif; color: #fff6de; background: #3a241ccc; text-align: center;
+    padding: 6px 12px; border-radius: 6px; transition: opacity 1s; pointer-events: none;
   }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
-<div id="hint">Walk with the arrow keys or WASD. Zoom with the mouse wheel or + and &minus;. Press 0 to see the whole town, M to turn the sound off.</div>
+<div id="hint">Walk with the arrow keys or WASD, hold Shift to run. Walk into a doorway to go inside. Drag yourself with the mouse to drop in anywhere. Zoom with the mouse wheel or + and &minus;, 0 shows everything, M turns the sound off.</div>
 <script src="maps/town-1950s.js"></script>
+<script src="rooms/rooms.js"></script>
 <script>
 'use strict';
-// The town: maps/town-1950s.js says where the walker cannot go (TOWN.solid, a grid
-// of half tiles) and lists every standing thing as [x, y, w, h, ground line].
-const TOWN = window.TOWN;
+// A place is somewhere the walker can be: the town, or the room inside a house. Each has a
+// picture (art), a picture of only its standing things (objects), where feet cannot go
+// (solid, a grid of squares) and every standing thing as [x, y, w, h, ground line].
+// The town comes from maps/town-1950s.js, the rooms from rooms/rooms.js.
+const TOWN = Object.assign(window.TOWN, { art: 'maps/town-1950s-hd.png', objects: 'maps/town-1950s-objects.png' });
+const ROOMS = window.ROOMS.map((room) => Object.assign(room, { art: 'rooms/' + room.art, objects: 'rooms/' + room.objects }));
 const canvas = document.getElementById('view');
 const ctx = canvas.getContext('2d');
 const hint = document.getElementById('hint');
 
-const SPEED = 230;                    // map pixels per second
+const SPEED = 230, RUN = 1.8;         // map pixels per second, and how much faster with Shift
 const FOOT_W = 22, FOOT_H = 12;       // the part of the walker that bumps into things
-const FRAME_W = 48, FRAME_H = 64;     // one drawing in maps/visitor.png
-const ROW = { down: 0, up: 1, left: 2, right: 3 };
+const FRAME_W = 48, FRAME_H = 64;     // one drawing in the walker's sheet: the same size whichever way they face
+const WALKER = 'characters/nano.png';  // Nano, the Chief Human Officer
+const ROW = { down: 0, right: 1, left: 2, up: 3 };   // sheet rows: toward us, right, left, away
 const STRIDE = [1, 0, 2, 0];          // step, stand, other step, stand
 const MAX_ZOOM = 4;
+const DOORSTEP = 40;                  // how near a door's ground line counts as walking into it
+const LIFT = 14;                      // how high the walker hangs while held by the mouse
 const MOVES = {
   ArrowUp: [0, -1], w: [0, -1], ArrowDown: [0, 1], s: [0, 1],
   ArrowLeft: [-1, 0], a: [-1, 0], ArrowRight: [1, 0], d: [1, 0],
@@ -39,26 +46,59 @@ const MOVES = {
 
 const me = { x: TOWN.spawn[0], y: TOWN.spawn[1], facing: 'up', walked: 0, moving: false };
 const keys = new Set();
+const pics = {};                      // every picture, by file name
+let place = TOWN;                     // where the walker is now
+let door = null;                      // the town door they came in by, while inside a room
+let held = null;                      // while the mouse holds the walker: the pointer and where it gripped
+let look = [me.x, me.y];              // the point the camera is centred on
+let cam = [0, 0];                     // top-left corner of the view, in place pixels
+let glide = false;                    // the camera is easing back to the walker after a drop
+let fade = 0;                         // 1 just after going through a door, falling to 0
 let zoom = 1;
-let art = null;                       // { town, objects, visitor } once loaded
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve(img);
+    img.onload = () => { pics[src] = img; resolve(img); };
     img.onerror = () => reject(new Error('Could not load ' + src));
     img.src = src;
   });
 }
 
 function solid(x, y) {
-  if (x < 0 || y < 0 || x >= TOWN.w || y >= TOWN.h) return true;
-  return TOWN.solid[Math.floor(y / TOWN.cell)][Math.floor(x / TOWN.cell)] === '1';
+  if (x < 0 || y < 0 || x >= place.w || y >= place.h) return true;
+  return place.solid[Math.floor(y / place.cell)][Math.floor(x / place.cell)] === '1';
 }
 
 function blocked(x, y) {
   const left = x - FOOT_W / 2, right = x + FOOT_W / 2 - 1, top = y - FOOT_H, bottom = y - 1;
   return solid(left, top) || solid(right, top) || solid(left, bottom) || solid(right, bottom);
+}
+
+// ---------- going in and out ----------
+function moveTo(next, x, y, facing) {
+  place = next;
+  Object.assign(me, { x, y, facing });
+  look = [me.x, me.y - FRAME_H / 2];
+  glide = false;
+  fade = 1;
+  setZoom(zoom);
+}
+
+function throughDoors(dy) {
+  if (place === TOWN) {
+    if (dy >= 0) return;                                     // doors are walked into, heading up
+    const hit = TOWN.doors.find(([x, ground, half]) =>
+      Math.abs(me.x - x) <= half && me.y >= ground && me.y <= ground + DOORSTEP && blocked(me.x, me.y - 4));
+    if (!hit) return;
+    door = hit;
+    const room = ROOMS[hit[3]];
+    moveTo(room, room.enter[0], room.enter[1], 'up');
+  } else if (me.y >= place.out[2] && me.x >= place.out[0] && me.x < place.out[1]) {
+    const [x, ground] = door;                                // out the bottom door: back in front of the house
+    moveTo(TOWN, x, ground + DOORSTEP + 8, 'down');
+    while (blocked(me.x, me.y)) me.y += 4;
+  }
 }
 
 function walk(dt) {
@@ -70,15 +110,74 @@ function walk(dt) {
   me.moving = dx !== 0 || dy !== 0;
   if (!me.moving) return;
   me.facing = dy < 0 ? 'up' : dy > 0 ? 'down' : dx < 0 ? 'left' : 'right';
-  const step = SPEED * dt / Math.hypot(dx, dy);
+  const step = SPEED * (keys.has('Shift') ? RUN : 1) * dt / Math.hypot(dx, dy);
   const fromX = me.x, fromY = me.y;
   if (!blocked(me.x + dx * step, me.y)) me.x += dx * step;   // slide along walls
   if (!blocked(me.x, me.y + dy * step)) me.y += dy * step;
   me.walked += Math.hypot(me.x - fromX, me.y - fromY);
+  throughDoors(dy);
 }
 
+// ---------- grabbing with the mouse ----------
+function toPlace(clientX, clientY) {                         // a spot on the screen, in place pixels
+  return [cam[0] + clientX / zoom, cam[1] + clientY / zoom];
+}
+
+function overWalker(clientX, clientY) {
+  const [x, y] = toPlace(clientX, clientY);
+  return Math.abs(x - me.x) <= FRAME_W / 2 && y <= me.y + 4 && y >= me.y - FRAME_H;
+}
+
+function nearestFree(x, y) {                                 // the closest spot to (x, y) where feet fit
+  x = Math.min(place.w - FOOT_W, Math.max(FOOT_W, x));
+  y = Math.min(place.h - 2, Math.max(FOOT_H, y));
+  for (let r = 0; r < Math.max(place.w, place.h); r += 6) {
+    for (let a = 0; a < 6.283; a += 6 / Math.max(6, r)) {
+      const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+      if (!blocked(px, py)) return [px, py];
+    }
+  }
+  return [x, y];
+}
+
+function carry(dt, viewW, viewH) {                           // the walker hangs from the pointer; near an edge the view slides
+  const edge = 56, slide = 700 / zoom;
+  const push = (at, size) => at < edge ? -1 : at > size - edge ? 1 : 0;
+  look[0] += push(held.x, innerWidth) * slide * dt;
+  look[1] += push(held.y, innerHeight) * slide * dt;
+  if (place.w > viewW) look[0] = Math.min(place.w - viewW / 2, Math.max(viewW / 2, look[0]));
+  if (place.h > viewH) look[1] = Math.min(place.h - viewH / 2, Math.max(viewH / 2, look[1]));
+  const [x, y] = toPlace(held.x, held.y);
+  me.x = x + held.dx;
+  me.y = y + held.dy;
+  me.moving = false;
+}
+
+canvas.addEventListener('pointerdown', (event) => {
+  if (!overWalker(event.clientX, event.clientY)) return;
+  const [x, y] = toPlace(event.clientX, event.clientY);
+  held = { x: event.clientX, y: event.clientY, dx: me.x - x, dy: me.y - y };
+  canvas.setPointerCapture(event.pointerId);
+  hint.style.opacity = 0;
+});
+canvas.addEventListener('pointermove', (event) => {
+  if (held) { held.x = event.clientX; held.y = event.clientY; }
+  canvas.style.cursor = held ? 'grabbing' : overWalker(event.clientX, event.clientY) ? 'grab' : 'default';
+});
+function drop() {
+  if (!held) return;
+  held = null;
+  [me.x, me.y] = nearestFree(me.x, me.y);                    // dropped on a roof or a table: set down beside it
+  me.facing = 'down';
+  glide = true;
+  canvas.style.cursor = 'default';
+}
+canvas.addEventListener('pointerup', drop);
+canvas.addEventListener('pointercancel', drop);
+
+// ---------- the view ----------
 function minZoom() {
-  return Math.min(innerWidth / TOWN.w, innerHeight / TOWN.h);
+  return Math.min(1, innerWidth / place.w, innerHeight / place.h);
 }
 
 function setZoom(z) {
@@ -91,50 +190,76 @@ function resize() {
   setZoom(zoom);
 }
 
-// Top-left corner of the view, in map pixels: follow the walker, stop at the edges,
-// and centre the town when the whole of it fits on screen.
-function camera(scale) {
-  const viewW = canvas.width / scale, viewH = canvas.height / scale;
+// The camera follows the walker, stops at the edges of the place, and centres the place when
+// the whole of it fits on screen. After a drop it eases back to the walker.
+function moveCamera(dt, viewW, viewH) {
+  if (!held) {
+    const tx = me.x, ty = me.y - FRAME_H / 2, far = Math.hypot(tx - look[0], ty - look[1]);
+    if (glide && far > 2) {
+      const pull = Math.min(1, dt * 7);
+      look = [look[0] + (tx - look[0]) * pull, look[1] + (ty - look[1]) * pull];
+    } else {
+      look = [tx, ty];
+      glide = false;
+    }
+  }
   const along = (pos, view, size) =>
     view >= size ? (size - view) / 2 : Math.min(size - view, Math.max(0, pos - view / 2));
-  return [along(me.x, viewW, TOWN.w), along(me.y - FRAME_H / 2, viewH, TOWN.h)];
+  cam = [along(look[0], viewW, place.w), along(look[1], viewH, place.h)];
 }
 
-function draw() {
+function drawWalker(lift) {
+  const left = Math.round(me.x - FRAME_W / 2), top = Math.round(me.y - FRAME_H + 2);
+  ctx.fillStyle = 'rgba(60, 38, 48, 0.32)';
+  ctx.beginPath();
+  ctx.ellipse(me.x + 3, me.y - 1, lift ? 11 : 15, lift ? 4 : 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const frame = me.moving ? STRIDE[Math.floor(me.walked / 16) % STRIDE.length] : 0;
+  ctx.drawImage(pics[WALKER], frame * FRAME_W, ROW[me.facing] * FRAME_H, FRAME_W, FRAME_H,
+    left, top - lift, FRAME_W, FRAME_H);
+  return [left, top];
+}
+
+function draw(dt) {
   const scale = zoom * devicePixelRatio;
-  const [camX, camY] = camera(scale);
+  const viewW = canvas.width / scale, viewH = canvas.height / scale;
+  if (held) carry(dt, viewW, viewH);
+  moveCamera(dt, viewW, viewH);
+  const [camX, camY] = cam;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#3a241c';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(scale, 0, 0, scale, -Math.round(camX * scale), -Math.round(camY * scale));
   ctx.imageSmoothingEnabled = scale < 1;   // crisp pixels zoomed in, clean shrink zoomed out
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(art.town, 0, 0);
-  const viewW = canvas.width / scale, viewH = canvas.height / scale;
-  drawEffects(false, camX, camY, viewW, viewH);
+  ctx.drawImage(pics[place.art], 0, 0);
+  const outside = place === TOWN;
+  if (outside) drawEffects(false, camX, camY, viewW, viewH);
+  else place.fires.forEach(([x, y]) => fire(x, y));
 
-  const left = Math.round(me.x - FRAME_W / 2), top = Math.round(me.y - FRAME_H + 2);
-  ctx.fillStyle = 'rgba(60, 38, 48, 0.32)';
-  ctx.beginPath();
-  ctx.ellipse(me.x + 3, me.y - 1, 15, 5, 0, 0, Math.PI * 2);
-  ctx.fill();
-  const frame = me.moving ? STRIDE[Math.floor(me.walked / 16) % STRIDE.length] : 0;
-  ctx.drawImage(art.visitor, frame * FRAME_W, ROW[me.facing] * FRAME_H, FRAME_W, FRAME_H,
-    left, top, FRAME_W, FRAME_H);
-
-  // Anything standing nearer the camera than the walker is redrawn over them.
-  for (const [x, y, w, h, ground] of TOWN.things) {
-    if (ground <= me.y) continue;
-    const x0 = Math.max(x, left), y0 = Math.max(y, top);
-    const x1 = Math.min(x + w, left + FRAME_W), y1 = Math.min(y + h, top + FRAME_H);
-    if (x1 > x0 && y1 > y0) ctx.drawImage(art.objects, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+  if (!held) {
+    const [left, top] = drawWalker(0);
+    // Anything standing nearer the camera than the walker is redrawn over them.
+    for (const [x, y, w, h, ground] of place.things) {
+      if (ground <= me.y) continue;
+      const x0 = Math.max(x, left), y0 = Math.max(y, top);
+      const x1 = Math.min(x + w, left + FRAME_W), y1 = Math.min(y + h, top + FRAME_H);
+      if (x1 > x0 && y1 > y0) ctx.drawImage(pics[place.objects], x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+    }
   }
-  drawEffects(true, camX, camY, viewW, viewH);
+  if (outside) drawEffects(true, camX, camY, viewW, viewH);
+  if (held) drawWalker(LIFT);                                // in the air, in front of everything
+  if (fade > 0) {                                            // a blink of dark when going through a door
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = 'rgba(58, 36, 28, ' + fade.toFixed(3) + ')';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    fade = Math.max(0, fade - dt * 4);
+  }
 }
 
 // ---------- moving effects ----------
 // All drawn as shapes, not pictures, so they stay smooth at any zoom. TOWN.fx (written by
-// tools/make_town_hd.py) says where each one belongs in the art.
+// tools/make_town_hd.py) says where each one belongs in the town; a room lists its own fires.
 const FX = TOWN.fx;
 const INK = '#3a241c';
 
@@ -262,6 +387,30 @@ function drawEffects(front, camX, camY, viewW, viewH) {
 }
 
 
+function fire(x, y) {                                       // flames in a hearth: (x, y) is the middle of its floor
+  const t = still.matches ? 0 : performance.now() / 1000;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(x - 30, y - 40, 60, 36); ctx.clip();
+  [['#c6543e', 1], ['#f0a03c', 0.72], ['#ffe9a0', 0.42]].forEach(([colour, size], layer) => {
+    ctx.fillStyle = colour;
+    for (let i = 0; i < 5; i++) {
+      const fx = x - 20 + i * 10, tall = (16 + 12 * Math.abs(Math.sin(t * (5 + i * 1.3) + i * 2 + layer))) * size;
+      const lean = Math.sin(t * 7 + i * 1.7) * 3;
+      ctx.beginPath();
+      ctx.moveTo(fx - 7 * size, y - 5);
+      ctx.quadraticCurveTo(fx - 6 * size, y - 5 - tall * 0.6, fx + lean, y - 5 - tall);
+      ctx.quadraticCurveTo(fx + 6 * size, y - 5 - tall * 0.6, fx + 7 * size, y - 5);
+      ctx.fill();
+    }
+  });
+  ctx.restore();
+  const g = ctx.createRadialGradient(x, y - 10, 4, x, y - 10, 70);   // warm light on the hearth and floor
+  g.addColorStop(0, 'rgba(255, 200, 110, ' + (0.26 + 0.05 * Math.sin(t * 9)).toFixed(3) + ')');
+  g.addColorStop(1, 'rgba(255, 200, 110, 0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y - 10, 70, 0, 7); ctx.fill();
+}
+
 // ---------- sound ----------
 // Made in the browser, no sound files: a very quiet breeze and, now and then, a bird.
 // Browsers only allow sound after a key press or click, so it starts on the first one.
@@ -311,9 +460,10 @@ function toggleSound() {
 
 let last = 0;
 function tick(now) {
-  walk(Math.min(0.05, (now - last) / 1000));
+  const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  draw();
+  if (!held) walk(dt);
+  draw(dt);
   requestAnimationFrame(tick);
 }
 
@@ -322,7 +472,7 @@ addEventListener('keydown', (event) => {
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   startSound();
   if (key === 'm' && !event.repeat) toggleSound();
-  if (MOVES[key]) { keys.add(key); hint.style.opacity = 0; event.preventDefault(); }
+  if (MOVES[key] || key === 'Shift') { keys.add(key); hint.style.opacity = 0; event.preventDefault(); }
   else if (key === '+' || key === '=') setZoom(zoom * 1.25);
   else if (key === '-' || key === '_') setZoom(zoom / 1.25);
   else if (key === '0') setZoom(zoom > minZoom() * 1.01 ? 0 : 1);
@@ -330,16 +480,15 @@ addEventListener('keydown', (event) => {
 addEventListener('keyup', (event) => {
   keys.delete(event.key.length === 1 ? event.key.toLowerCase() : event.key);
 });
-addEventListener('blur', () => keys.clear());
+addEventListener('blur', () => { keys.clear(); drop(); });
 addEventListener('wheel', (event) => {
   setZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1));
   event.preventDefault();
 }, { passive: false });
 addEventListener('resize', resize);
 
-Promise.all(['maps/town-1950s-hd.png', 'maps/town-1950s-objects.png', 'maps/visitor.png'].map(loadImage))
-  .then(([town, objects, visitor]) => {
-    art = { town, objects, visitor };
+Promise.all([WALKER, TOWN.art, TOWN.objects, ...ROOMS.flatMap((room) => [room.art, room.objects])].map(loadImage))
+  .then(() => {
     resize();
     requestAnimationFrame(tick);
   })
