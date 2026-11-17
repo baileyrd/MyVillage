@@ -28,8 +28,9 @@ const hint = document.getElementById('hint');
 
 const SPEED = 230;                    // map pixels per second
 const FOOT_W = 22, FOOT_H = 12;       // the part of the walker that bumps into things
-const FRAME_W = 48, FRAME_H = 64;     // one drawing in maps/visitor.png
-const ROW = { down: 0, up: 1, left: 2, right: 3 };
+const FRAME_W = 48, FRAME_H = 64;     // one drawing in the walker's sheet
+const WALKER = 'characters/nano.png';  // Nano, the Chief Human Officer
+const ROW = { down: 0, right: 1, left: 2, up: 3 };   // sheet rows: toward us, right, left, away
 const STRIDE = [1, 0, 2, 0];          // step, stand, other step, stand
 const MAX_ZOOM = 4;
 const MOVES = {
@@ -337,7 +338,7 @@ addEventListener('wheel', (event) => {
 }, { passive: false });
 addEventListener('resize', resize);
 
-Promise.all(['maps/town-1950s-hd.png', 'maps/town-1950s-objects.png', 'maps/visitor.png'].map(loadImage))
+Promise.all(['maps/town-1950s-hd.png', 'maps/town-1950s-objects.png', WALKER].map(loadImage))
   .then(([town, objects, visitor]) => {
     art = { town, objects, visitor };
     resize();
